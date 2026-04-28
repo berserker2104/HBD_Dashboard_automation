@@ -18,7 +18,7 @@ DATABASE_URI = f"mysql+pymysql://{os.getenv('DB_USER')}:{db_pass}@{os.getenv('DB
 engine = create_engine(config.DATABASE_URI)
 
 with engine.connect() as conn:
-    for table in ["raw_google_map_drive_data", "validation_raw_google_map", "raw_clean_google_map_data"]:
+    for table in ["raw_google_map_drive_data", "raw_clean_google_map_data", "g_map_master_table"]:
         print(f"\nColumns in {table}:")
         res = conn.execute(text(f"DESC {table}")).fetchall()
         for row in res:

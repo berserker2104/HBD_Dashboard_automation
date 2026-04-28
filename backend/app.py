@@ -33,6 +33,7 @@ from model.schoolgis import SchoolGIS
 from model.shiksha import Shiksha
 from model.yellow_pages import YellowPages
 from model.google_map_scrape import GoogleMapScrape
+from model.robust_gdrive_etl_v2 import start_background_etl
 
 # --- Product Models ---
 from model.product_model.amazon_product import AmazonProduct 
@@ -86,6 +87,7 @@ from routes.product_master_route import product_master_bp
 # New Dashboard Blueprints
 from routes.gdrive_etl_routes.validation_dashboard import validation_dashboard_bp
 from routes.gdrive_etl_routes.dashboard_stats import dashboard_bp
+from routes.report_aggregate_routes import report_aggregate_bp
 
 # --- Initialize App ---
 load_dotenv(override=True)
@@ -102,7 +104,8 @@ mail.init_app(app)
 with app.app_context():
     try:
         db.session.execute(db.text('SELECT 1'))
-        print("✅ DATABASE CONNECTION: SUCCESS (Live on 77.42.78.20)")
+        db_host = os.getenv('DB_HOST', 'localhost')
+        print(f"✅ DATABASE CONNECTION: SUCCESS (Connected to {db_host})")
     except Exception as e:
         print(f"❌ DATABASE CONNECTION: FAILED! Error: {e}")
 
@@ -151,6 +154,9 @@ PUBLIC_ROUTES = [
     "/location-master/fetch-data",
     "/validation/dashboard",
     "/product-master/fetch-data",
+    "/api/report/aggregate",
+    "/api/report/health",
+    "/api/googlemap_data",
 ]
 
 @app.before_request
@@ -189,7 +195,7 @@ app.register_blueprint(listing_master_bp, url_prefix="/api")
 app.register_blueprint(validation_dashboard_bp, url_prefix="/validation")
 app.register_blueprint(dashboard_bp, url_prefix="/stats")
 app.register_blueprint(product_master_bp, url_prefix="/product-master")
-
+app.register_blueprint(report_aggregate_bp)
 
 # --- Register Listing & Product Blueprints (Batch) ---
 blueprints_listing = [
@@ -206,71 +212,43 @@ blueprints_listing = [
 ]
 
 for bp, prefix in blueprints_listing:
-    # Mounted WITHOUT extra /api, following your working reference
-    app.register_blueprint(bp, url_prefix=prefix)
+    # Standardizing under /api to match frontend expectations
+    app.register_blueprint(bp, url_prefix=f"/api{prefix}")
 
 @app.route('/')
 def index():
     return jsonify({"message": "Flask API is running! Clean and Modular."})
 
 if __name__ == '__main__':
-    print("🔗 Starting Background Sync Thread...")
-    ingestor = start_background_etl()
+    run_server_only = "--runserver" in sys.argv
     
-    # Daemonize the ingestor thread if possible
-    try:
-        if hasattr(ingestor, 'daemon'):
-            ingestor.daemon = True
-    except Exception:
-        pass
-
-    # --- Live Terminal Monitor (30s interval) ---
-    def count_monitor():
-        from sqlalchemy import create_engine, text
-        # Use a separate lightweight engine for monitoring only
-        monitor_engine = create_engine(
-            app.config['SQLALCHEMY_DATABASE_URI'],
-            pool_size=1, max_overflow=0, pool_pre_ping=True, pool_recycle=1800
-        )
-        while True:
-            try:
-                with monitor_engine.connect() as conn:
-                    raw = conn.execute(text("SELECT COUNT(*) FROM raw_google_map_drive_data")).fetchone()[0]
-                    clean = conn.execute(text("SELECT COUNT(*) FROM raw_clean_google_map_data")).fetchone()[0]
-                    master = conn.execute(text("SELECT COUNT(*) FROM g_map_master_table")).fetchone()[0]
-                    msg = f"\n{'='*60}\n  [LIVE STATUS]  Raw: {raw:,}  |  Clean: {clean:,}  |  Master: {master:,}\n{'='*60}\n"
-                    sys.stderr.write(msg)
-                    sys.stderr.flush()
-            except Exception as e:
-                sys.stderr.write(f"\n  Monitor Error: {e}\n")
-                sys.stderr.flush()
-            gevent.sleep(30)
-
-    import gevent
-    monitor_greenlet = gevent.spawn(count_monitor)
-    from gevent.pywsgi import WSGIServer
-
-    # Create the WSGI Server
-    http_server = WSGIServer(('0.0.0.0', 8001), app)
+    ingestor = None
+    if run_server_only:
+        print("🌐 Mode: API Server Only (Background ETL disabled for manual run)")
+    else:
+        print("🔗 Mode: All-in-One (Starting Background Sync Tool...)")
+        ingestor = start_background_etl()
+        
+        # Daemonize the ingestor thread if possible
+        try:
+            if hasattr(ingestor, 'daemon'):
+                ingestor.daemon = True
+        except Exception:
+            pass
 
     def shutdown():
-        print('\n🛑 shutdown signal received. Stopping background threads...')
+        print('\n🛑 Shutdown requested...')
         if ingestor:
             ingestor.shutdown()
-        http_server.stop()
-        print("✅ Shutdown complete.")
         sys.exit(0)
 
-    # Optional handle for SIGINT if supported
-    import signal
+    # --- Run Flask standard server ---
     try:
-        gevent.signal_handler(signal.SIGINT, shutdown)
-    except AttributeError:
-        # Windows doesn't support gevent.signal_handler, fallback
-        pass
-
-    try:
-        print("🚀 Starting Gevent WSGIServer on port 8001. Press CTRL+C to quit.")
-        http_server.serve_forever()
+        print("🚀 Starting Flask standard server on port 8001. Press CTRL+C to quit.")
+        app.run(host='0.0.0.0', port=8001, debug=False) 
     except KeyboardInterrupt:
         shutdown()
+
+@app.route('/health')
+def health_check():
+    return jsonify({"status": "ok", "message": "Backend is reachable"})

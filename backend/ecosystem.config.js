@@ -2,7 +2,7 @@ export const apps = [
     {
         name: "flask-api",
         script: "app.py",
-        interpreter: "python3",
+        interpreter: "python",
         args: "--runserver",
         instances: 2, // Safe number of workers for API
         exec_mode: "cluster",
@@ -26,7 +26,7 @@ export const apps = [
     {
         name: "gdrive-orchestrator",
         script: "worker_etl.py",
-        interpreter: "python3",
+        interpreter: "python",
         instances: 1, // MUST BE 1. Do not scale this, it scans the drive
         watch: false,
         max_memory_restart: "500M",

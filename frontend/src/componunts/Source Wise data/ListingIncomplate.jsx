@@ -53,7 +53,7 @@ const ListingIncomplate = () => {
         category: categorySearch,
       });
 
-      const response = await fetch(`http://localhost:5000/?${queryParams}`);
+      const response = await fetch(`/?${queryParams}`);
 
       if (!response.ok) throw new Error("Backend connection failed");
 

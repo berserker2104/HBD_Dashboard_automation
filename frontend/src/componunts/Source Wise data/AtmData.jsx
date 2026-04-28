@@ -82,39 +82,42 @@ const AtmData = () => {
 
   return (
     <div className="min-h-screen mt-8 mb-12 px-4 rounded bg-white text-black">
-      {/* Header Section */}
-      <div className="flex justify-between items-end mb-6">
+      {/* --- PAGE HEADER --- */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between border-b border-gray-200 pb-8 mb-6 gap-4">
         <div>
-          <Typography variant="h4" className="font-bold text-blue-gray-900">
+          <Typography variant="h2" color="blue-gray" className="font-black tracking-tight leading-none mb-2">
             ATM Data Master
           </Typography>
-          <Typography variant="small" className="font-medium text-gray-500">
-            {error ? (
-              <span className="text-red-500 font-bold">{error}</span>
-            ) : (
-              `Displaying verified ATM records (${totalRecords} total)`
-            )}
+          <Typography className="text-gray-500 font-medium">
+            Intelligence report for verified automated teller machines.
           </Typography>
         </div>
-        <div className="flex gap-2">
-          <Button 
-            variant="gradient" 
-            color="green" 
-            size="sm" 
-            className="flex items-center gap-2"
-            onClick={exportToExcel}
-          >
-            <ArrowDownTrayIcon className="h-4 w-4" /> Export Page
-          </Button>
-          <Button 
-            variant="outlined" 
-            size="sm" 
-            className="flex items-center gap-2"
-            onClick={fetchAtmData}
-          >
-            <ArrowPathIcon className="h-4 w-4" /> Refresh
-          </Button>
+        <div className="bg-blue-50 px-8 py-4 rounded-3xl shadow-sm border border-blue-100 text-right">
+          <Typography className="text-[10px] font-bold text-blue-500 uppercase tracking-widest mb-1">Total ATM Records</Typography>
+          <Typography variant="h2" color="blue-gray" className="font-black">
+            {loading ? "..." : totalRecords.toLocaleString()}
+          </Typography>
         </div>
+      </div>
+
+      <div className="flex justify-end gap-2 mb-4">
+        <Button
+          variant="gradient"
+          color="green"
+          size="sm"
+          className="flex items-center gap-2 normal-case font-bold"
+          onClick={exportToExcel}
+        >
+          <ArrowDownTrayIcon className="h-4 w-4" /> Export Page
+        </Button>
+        <Button
+          variant="outlined"
+          size="sm"
+          className="flex items-center gap-2 normal-case font-bold"
+          onClick={fetchAtmData}
+        >
+          <ArrowPathIcon className="h-4 w-4" /> Refresh Sync
+        </Button>
       </div>
 
       <Card className="h-full w-full border border-blue-gray-100">
@@ -122,44 +125,44 @@ const AtmData = () => {
           <div className="flex flex-wrap items-center justify-between gap-y-4">
             <div className="flex w-full shrink-0 gap-2 md:w-max">
               <div className="w-72">
-                <Input 
-                  label="Search ATM Name" 
-                  value={search} 
+                <Input
+                  label="Search ATM Name"
+                  value={search}
                   onChange={(e) => {
                     setSearch(e.target.value);
                     setCurrentPage(1); // Logic: Reset page on search
-                  }} 
+                  }}
                 />
               </div>
               <div className="w-48">
-                <Input 
-                  label="Filter by City" 
-                  value={citySearch} 
+                <Input
+                  label="Filter by City"
+                  value={citySearch}
                   onChange={(e) => {
                     setCitySearch(e.target.value);
                     setCurrentPage(1); // Logic: Reset page on city filter
-                  }} 
+                  }}
                 />
               </div>
             </div>
-            
+
             <div className="flex items-center gap-4">
               <Typography variant="small" className="font-bold text-blue-gray-700">
                 Page {currentPage} of {totalPages}
               </Typography>
               <div className="flex gap-2">
-                <Button 
-                  variant="outlined" 
-                  size="sm" 
-                  disabled={currentPage === 1 || loading} 
+                <Button
+                  variant="outlined"
+                  size="sm"
+                  disabled={currentPage === 1 || loading}
                   onClick={() => setCurrentPage(p => p - 1)}
                 >
                   Previous
                 </Button>
-                <Button 
-                  variant="outlined" 
-                  size="sm" 
-                  disabled={currentPage === totalPages || loading} 
+                <Button
+                  variant="outlined"
+                  size="sm"
+                  disabled={currentPage === totalPages || loading}
                   onClick={() => setCurrentPage(p => p + 1)}
                 >
                   Next

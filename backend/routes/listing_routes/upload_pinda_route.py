@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from extensions import db
-from model.pinda import pinda
+from model.pinda import Pinda
 
 pinda_bp = Blueprint('pinda_bp', __name__)
 

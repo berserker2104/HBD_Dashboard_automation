@@ -17,9 +17,8 @@ def fetch_bank_data():
         query = Bank.query
 
         if search:
-            # Search by Bank Name OR Branch OR IFSC
             query = query.filter(
-                (Bank.name.ilike(f"%{search}%")) | 
+                (Bank.bank.ilike(f"%{search}%")) | 
                 (Bank.branch.ilike(f"%{search}%")) |
                 (Bank.ifsc.ilike(f"%{search}%"))
             )

@@ -46,15 +46,10 @@ def apply_new_constraints():
         """))
 
         # 3. Reset Pipeline Progress to re-evaluate data
-        # Especially the ones we deleted from validation_raw_google_map
-        print("🔄 Resetting validation pipeline progress to 0 (Full Re-scan)...")
+        print("🔄 Resetting ETL pipeline progress to 0 (Full Re-scan)...")
         conn.execute(text("UPDATE etl_metadata SET meta_value = '0' WHERE meta_key = 'last_processed_id'"))
         
-        print("🗑️ Clearing existing validation states to allow re-processing...")
-        # We don't truncate clean tables unless requested, but we should clear validation_raw_google_map
-        # so everything gets re-validated with the new logic.
-        conn.execute(text("TRUNCATE TABLE validation_raw_google_map"))
-        
+        print("🗑️ Resetting processed states...")
         # Note: We keep raw_clean_google_map_data and g_map_master_table.
         # The pipeline will now skip them if they are duplicates of existing rows, 
         # or fail to insert them if they are already there (UPSERT/IGNORE logic).

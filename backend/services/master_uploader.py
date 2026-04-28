@@ -80,44 +80,6 @@ def upload_master_csv(file_paths, session, report):
                     if area: area_set.add(area)
                     if category: category_set.add(category)
 
-                    # ✅ ADDED ALL NEW COLUMNS HERE
-                    batch.append({
-                        "global_business_id": global_id,
-                        "business_id": safe_get(row, "business_id"),
-                        "asin": safe_get(row, "asin"),
-                        "ifsc": safe_get(row, "ifsc"),
-                        "micr": safe_get(row, "micr"),
-                        "branch_code": safe_get(row, "branch_code"),
-                        "branch": safe_get(row, "branch"),
-                        "price": clean_data_decimal(safe_get(row, "price")),
-                        "listPrice": clean_data_decimal(safe_get(row, "listPrice")),
-                        "isBestSeller": safe_get(row, "isBestSeller"),
-                        "boughtInLastMonth": safe_get(row, "boughtInLastMonth"),
-                        "ImgUrl": safe_get(row, "ImgUrl"),
-                        "business_name": safe_get(row, "business_name"),
-                        "business_category": category,
-                        "business_subcategory": safe_get(row, "business_subcategory"),
-                        "ratings": clean_data_decimal(safe_get(row, "ratings")),
-                        "stars": safe_get(row, "stars"),
-                        "reviews": clean_data_decimal(safe_get(row, "reviews")),
-                        "primary_phone": primary_phone,
-                        "secondary_phone": clean_data_decimal(safe_get(row, "secondary_phone")),
-                        "other_phones": clean_data_decimal(safe_get(row, "other_phones")),
-                        "virtual_phone": clean_data_decimal(safe_get(row, "virtual_phone")),
-                        "whatsapp_phone": clean_data_decimal(safe_get(row, "whatsapp_phone")),
-                        "email": email,
-                        "website_url": safe_get(row, "website_url"),
-                        "facebook_url": safe_get(row, "facebook_url"),
-                        "linkedin_url": safe_get(row, "linkedin_url"),
-                        "twitter_url": safe_get(row, "twitter_url"),
-                        "address": address,
-                        "area": area,
-                        "city": city,
-                        "district": safe_get(row, "district"),
-                        "state": safe_get(row, "state") or "Unknown",
-                        "pincode": clean_data_decimal(safe_get(row, "pincode")),
-                    }
-                    
                     # --- Location Validation & Fix ---
                     # 1. Initial extraction from address if missing
                     ext_area, ext_city, ext_state, ext_pin = extract_location_from_address(address)

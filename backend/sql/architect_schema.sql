@@ -35,8 +35,10 @@ CREATE TABLE IF NOT EXISTS raw_google_map_drive_data (
     etl_version VARCHAR(50),
     task_id VARCHAR(255),
     file_hash VARCHAR(255),
+    row_signature VARCHAR(32) COMMENT 'MD5 hash of all 11 business columns for exact deduplication',
     
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE INDEX idx_row_signature (row_signature),
     INDEX idx_drive_file_id (drive_file_id),
     INDEX idx_name (name(100)),
     INDEX idx_state (state(50)),
@@ -46,53 +48,13 @@ CREATE TABLE IF NOT EXISTS raw_google_map_drive_data (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------------------------
--- TABLE 2: validation_raw_google_map
--- -----------------------------------------------------------------------------
--- TABLE 2: validation_raw_google_map
--- Purpose: Snapshot, Validation Engine, and Processing State Controller
--- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS validation_raw_google_map (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    raw_id BIGINT UNIQUE NOT NULL COMMENT 'FK to raw_google_map_drive_data.id',
-    
-    -- Business Columns (Snapshot)
-    name VARCHAR(500),
-    address TEXT,
-    website TEXT,
-    phone_number VARCHAR(100),
-    reviews_count INT DEFAULT 0,
-    reviews_avg FLOAT DEFAULT 0.00,
-    category VARCHAR(255),
-    subcategory VARCHAR(255),
-    city VARCHAR(255),
-    state VARCHAR(255),
-    area VARCHAR(255),
-    created_at DATETIME,
-
-    -- Processing Columns
-    validation_status ENUM('PENDING', 'STRUCTURED', 'INVALID', 'UNSTRUCTURED', 'DUPLICATE', 'MISSING', 'VALID') NOT NULL DEFAULT 'PENDING',
-    cleaning_status ENUM('NOT_STARTED', 'CLEANED') NOT NULL DEFAULT 'NOT_STARTED',
-    
-    missing_fields TEXT,
-    invalid_format_fields TEXT,
-    duplicate_reason TEXT,
-    
-    processed_at DATETIME NULL,
-    
-    -- INDEXES
-    UNIQUE INDEX idx_raw_id (raw_id),
-    INDEX idx_validation_status (validation_status),
-    INDEX idx_cleaning_status (cleaning_status),
-    INDEX idx_composite_snapshot (name(100), address(100), phone_number)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- -----------------------------------------------------------------------------
--- TABLE 3: raw_clean_google_map_data
+-- TABLE 2: raw_clean_google_map_data
 -- Purpose: Store only fully validated + cleaned data
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS raw_clean_google_map_data (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     raw_id BIGINT UNIQUE NOT NULL COMMENT 'Refers to validation_raw_google_map.raw_id',
+    signature_hash VARCHAR(64) NULL,
     
     -- Cleaned Business Columns
     name VARCHAR(500),
@@ -106,11 +68,20 @@ CREATE TABLE IF NOT EXISTS raw_clean_google_map_data (
     city VARCHAR(255),
     state VARCHAR(255),
     area VARCHAR(255),
+
+    -- Processing Columns
+    validation_status ENUM('PENDING', 'STRUCTURED', 'INVALID', 'UNSTRUCTURED', 'DUPLICATE', 'MISSING', 'VALID') NOT NULL DEFAULT 'PENDING',
+    cleaning_status ENUM('NOT_STARTED', 'CLEANED') NOT NULL DEFAULT 'NOT_STARTED',
+    missing_fields TEXT,
+    invalid_format_fields TEXT,
+    duplicate_reason TEXT,
+    processed_at DATETIME NULL,
     created_at DATETIME,
 
     -- INDEXES
     UNIQUE INDEX idx_raw_id (raw_id),
-    UNIQUE INDEX idx_composite_dedup (name(100), phone_number, city(50), address(100))
+    UNIQUE INDEX idx_composite_dedup (name(100), phone_number, city(50), address(100)),
+    INDEX idx_sig_hash (signature_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------------------------
@@ -120,6 +91,7 @@ CREATE TABLE IF NOT EXISTS raw_clean_google_map_data (
 CREATE TABLE IF NOT EXISTS file_registry (
     drive_file_id VARCHAR(255) PRIMARY KEY,
     filename VARCHAR(500),
+    drive_folder_id VARCHAR(255),
     status ENUM('PENDING', 'IN_PROGRESS', 'PROCESSED', 'ERROR') DEFAULT 'PENDING',
     last_processed_row INT DEFAULT 0,
     error_message TEXT,
@@ -181,27 +153,4 @@ CREATE TABLE IF NOT EXISTS g_map_master_table (
     UNIQUE INDEX idx_unique_business (name(100), phone_number, city(50), address(100))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- -----------------------------------------------------------------------------
--- TABLE 5: invalid_google_map_data (Error Audit Layer)
--- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS invalid_google_map_data (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    raw_id BIGINT,
-    name VARCHAR(500),
-    address TEXT,
-    website TEXT,
-    phone_number VARCHAR(100),
-    bank_number VARCHAR(100) COMMENT 'Original phone number before cleaning',
-    reviews_count INT DEFAULT 0,
-    reviews_avg FLOAT DEFAULT 0.00,
-    category VARCHAR(255),
-    subcategory VARCHAR(255),
-    city VARCHAR(255),
-    state VARCHAR(255),
-    area VARCHAR(255),
-    validation_label VARCHAR(100) COMMENT 'MISSING, INVALID',
-    missing_fields TEXT,
-    invalid_format_fields TEXT,
-    error_reason TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- End of Schema

@@ -22,8 +22,8 @@ const MasterDataDashboard = () => {
     const fetchData = async () => {
       try {
         const query = taskId ? `?task_id=${taskId}` : "";
-        const response = await fetch(`https://dashboard.cityhangaround.com/api/master-dashboard-stats${query}`, {
-          headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` }
+        const response = await fetch(`http://localhost:8001/master-dashboard-stats${query}`, {
+          credentials: 'include',
         });
         const result = await response.json();
         if (result.status === "COMPLETED") setDashboardData(result.stats);

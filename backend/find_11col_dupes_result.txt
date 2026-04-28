@@ -1,0 +1,9 @@
+--------------------------------------------------------------------------------
+FINAL RESULT:
+Total Rows Processed:   4,814,996
+Unique Records:         4,737,200
+Duplicate Groups:       77,796
+Total Extra Dupe Rows:  77,796
+Total Time Taken:       123.7 seconds
+Efficiency:            38911 rows/sec
+--------------------------------------------------------------------------------

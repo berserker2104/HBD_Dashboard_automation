@@ -5,6 +5,7 @@ import {
   CardBody,
   Typography,
   Button,
+  Progress,
 } from "@material-tailwind/react";
 import {
   ArchiveBoxIcon,
@@ -12,222 +13,260 @@ import {
   TagIcon,
   ArrowLongRightIcon,
   ServerStackIcon,
-  GlobeAmericasIcon,
+  ExclamationTriangleIcon,
   ChartBarIcon,
   ClockIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  ChartPieIcon,
 } from "@heroicons/react/24/solid";
 import SlotCounter from "react-slot-counter";
 
-import api from "../utils/Api";
-
-import {StatisticsChart} from "../widgets/charts/statistics-chart";
-import statisticsChartsData2 from "../data/statistics-charts-data2";
-
 export function ReportDashboard() {
   const [stats, setStats] = useState({
-    productCount: 0,
-    cityCount: 0,
-    categoryCount: 0,
     loading: true,
+    data: null,
   });
-  
-  const staticData = {
-    totalScrapped: 1200000,
-  };
 
   useEffect(() => {
-    const fetchProductsData = async () => {
+    const fetchReportData = async () => {
       try {
-        const response = await api.get("/googlemap_data");
-        const products = response.data;
+        const response = await fetch("http://localhost:8001/api/report/aggregate");
+        if (!response.ok) throw new Error("API failed");
+        const d = await response.json();
 
-        const uniqueCities = new Set(products.map((p) => p.city)).size;
-        const uniqueCategories = new Set(products.map((p) => p.category)).size;
-
-        setStats({
-          productCount: products.length,
-          cityCount: uniqueCities,
-          categoryCount: uniqueCategories,
-          loading: false,
-        });
+        if (d.status === "COMPLETED" && d.summary) {
+          setStats({
+            loading: false,
+            data: d.summary,
+          });
+        } else {
+          setStats((prev) => ({ ...prev, loading: false }));
+        }
       } catch (error) {
-        console.error("error fetching products:", error);
+        console.error("error fetching report statistics:", error);
         setStats((prev) => ({ ...prev, loading: false }));
       }
     };
 
-    fetchProductsData();
+    fetchReportData();
   }, []);
 
-  const DashboardCard = ({ title, value, icon: Icon, color, link, subValue }) => (
-    <Card className="relative overflow-hidden border border-gray-200 bg-gradient-to-br from-white to-gray-500/30 shadow-md transition-all hover:shadow-md hover:-translate-y-3 duration-300">
-      <CardBody className="p-6">
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <Typography variant="h5" color="blue-gray" className="mb-1 font-bold tracking-tight">
-              {title}
-            </Typography>
-            <Typography className="font-normal text-gray-500 text-sm">
-              {subValue || "real-time updates"}
-            </Typography>
-          </div>
-          <div className={`flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br ${color} shadow-md`}>
-            <Icon className="h-6 w-6 text-white" />
-          </div>
-        </div>
-        
-        <div className="flex items-end justify-between mt-4">
-          <Typography variant="h2" color="blue-gray" className="font-black">
-            {stats.loading ? "..." : value?.toLocaleString()}
+  if (stats.loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Typography variant="h5" color="blue-gray">Loading Dashboard Analytics...</Typography>
+      </div>
+    );
+  }
+
+  const d = stats.data || {};
+
+  // KPI Calculations
+  const totalMasterData = d.total_master_data || d.total_records || 0;
+  const pendingMasterData = d.pending_master_data || d.pending_data || 0;
+
+  // Coverage Progress Math
+  const matchAreas = d.matched_master_areas || d.matched_areas || 0;
+  const totalAreas = d.total_location_master_areas || d.total_areas || 1;
+  const areaProgress = Math.round((matchAreas / totalAreas) * 100) || 0;
+
+  const matchStates = d.matched_master_states || d.matched_states || 0;
+  const totalStates = d.total_location_master_states || d.total_states || 1;
+  const stateProgress = Math.round((matchStates / totalStates) * 100) || 0;
+
+  const matchCities = d.matched_master_cities || d.matched_cities || 0;
+  const totalCities = d.total_location_master_cities || d.total_cities || 1;
+  const cityProgress = Math.round((matchCities / totalCities) * 100) || 0;
+
+  const matchCategories = d.matched_categories_master || d.matched_categories || 0;
+  const totalCategories = d.total_master_categories || d.total_categories || 1;
+  const categoryProgress = Math.round((matchCategories / totalCategories) * 100) || 0;
+
+  // Unmatched
+  const unmatchedStates = d.unmatched_master_states || d.unmatched_states || 0;
+  const unmatchedCities = d.unmatched_master_cities || d.unmatched_cities || 0;
+  const unmatchedCategories = d.unmatched_category_master || d.unmatched_categories || 0;
+
+  const ProgressCard = ({ title, match, total, progress, color, colorClass }) => (
+    <Card className="border border-gray-100 shadow-sm relative overflow-hidden">
+      <CardBody className="p-4">
+        <Typography variant="small" className="font-bold text-gray-500 mb-2 uppercase">{title}</Typography>
+        <div className="flex justify-between items-end mb-2">
+          <Typography variant="h4" color="blue-gray" className="font-black">
+            {match.toLocaleString()} <span className="text-sm font-normal text-gray-500">/ {total.toLocaleString()}</span>
           </Typography>
-          
-          {link && (
-            <Link to={link}>
-              <Button size="sm" variant="text" color="blue-gray" className="flex items-center gap-2 group hover:bg-gray-300 p-2 normal-case font-bold">
-                view report
-                <ArrowLongRightIcon className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-              </Button>
-            </Link>
-          )}
+          <Typography variant="h6" className={colorClass + " font-bold"}>
+            {progress}%
+          </Typography>
         </div>
+        <Progress value={progress} color={color} size="sm" className="rounded-full bg-gray-100" />
       </CardBody>
     </Card>
   );
 
   return (
-    <div className="mt-10 flex w-full flex-col gap-6 min-h-screen pb-10 px-4 bg-slate-50/50">
-      
-      <Card className="relative w-full overflow-hidden border border-gray-200 bg-gradient-to-br from-white to-gray-500/30 shadow-sm">
-        <div className="absolute top-0 right-0 -mt-8 -mr-8 h-48 w-48 rounded-full bg-blue-100/30 blur-3xl"></div>
-        <div className="absolute bottom-0 left-0 -mb-8 -ml-8 h-48 w-48 rounded-full bg-slate-200/40 blur-3xl"></div>
-        
-        <CardBody className="flex flex-col items-center justify-center p-12 text-center z-10 relative">
-          <div className="mb-4 p-4 bg-white shadow-sm border border-gray-100 rounded-2xl">
-            <ServerStackIcon className="h-10 w-10 text-gray-900" />
+    <div className="mt-8 flex w-full flex-col gap-8 min-h-screen pb-10 px-4 xl:px-8 bg-slate-50/50">
+
+      {/* 1. TOP ROW: High-Level KPIs */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+
+        {/* Total Data Volume */}
+        <Card className="border border-blue-100 bg-gradient-to-br from-blue-50 to-white shadow-sm overflow-hidden group">
+          <CardBody className="p-6 relative">
+            <div className="absolute right-0 top-0 p-6 opacity-10 transition-transform group-hover:scale-110">
+              <ServerStackIcon className="h-24 w-24 text-blue-500" />
+            </div>
+            <Typography variant="h6" className="text-blue-600 mb-2 font-bold uppercase tracking-wider">Total Data Volume</Typography>
+            <Typography variant="h1" color="blue-gray" className="font-black text-5xl">
+              <SlotCounter value={totalMasterData} duration={1} autoAnimationStart={true} />
+            </Typography>
+            <Typography className="text-gray-500 mt-2 text-sm">Records consolidated in master_table</Typography>
+          </CardBody>
+        </Card>
+
+        {/* Scraping Progress % */}
+        <Card className="border border-green-100 bg-gradient-to-br from-green-50 to-white shadow-sm overflow-hidden">
+          <CardBody className="p-6 flex flex-col justify-center items-center h-full">
+            <Typography variant="h6" className="text-green-600 mb-4 font-bold uppercase tracking-wider self-start">Area Coverage</Typography>
+            <div className="relative flex justify-center items-center w-full">
+              {/* Circular rough simulation using a large gauge or progress */}
+              <div className="w-full flex flex-col items-center justify-center">
+                <Typography variant="h1" className="text-green-500 font-extrabold text-6xl">
+                  <SlotCounter value={areaProgress} />%
+                </Typography>
+                <Typography className="text-gray-500 text-sm mt-4 font-medium px-4 py-1.5 bg-green-100/50 rounded-full">
+                  {matchAreas.toLocaleString()} of {totalAreas.toLocaleString()} Areas Matched
+                </Typography>
+              </div>
+            </div>
+          </CardBody>
+        </Card>
+
+        {/* Pending Tasks */}
+        <Card className="border border-orange-100 bg-gradient-to-br from-orange-50 to-white shadow-sm overflow-hidden group">
+          <CardBody className="p-6 relative">
+            <div className="absolute right-0 top-0 p-6 opacity-10 transition-transform group-hover:scale-110">
+              <ClockIcon className="h-24 w-24 text-orange-500" />
+            </div>
+            <Typography variant="h6" className="text-orange-600 mb-2 font-bold uppercase tracking-wider">Pending Tasks</Typography>
+            <Typography variant="h1" color="blue-gray" className="font-black text-5xl">
+              <SlotCounter value={pendingMasterData} duration={1} autoAnimationStart={true} />
+            </Typography>
+            <Typography className="text-gray-500 mt-2 text-sm">Records waiting to be processed</Typography>
+            <Link to="/report-data" className="mt-4 inline-block">
+              <Button size="sm" variant="text" color="orange" className="p-0 hover:bg-transparent flex items-center gap-1 group-hover:gap-2 transition-all">
+                View List <ArrowLongRightIcon className="h-4 w-4" />
+              </Button>
+            </Link>
+          </CardBody>
+        </Card>
+
+      </div>
+
+      {/* 4. SPECIAL ALERT WIDGET */}
+      {unmatchedStates > 0 && (
+        <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-lg shadow-sm flex items-start gap-4">
+          <ExclamationTriangleIcon className="h-6 w-6 text-red-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <Typography variant="h6" color="red" className="font-bold">⚠️ Data Alert: {unmatchedStates} State(s) completely unmatched</Typography>
+            <Typography className="text-gray-700 mt-1 text-sm">
+              In your master data, there are state records that do not match the official Location Master.
+              <br /><strong>Action Required:</strong> Check for specific records like "OdishaPondicherry", "Unknown", or spelling mistakes in states.
+            </Typography>
           </div>
-          <Typography variant="h1" color="blue-gray" className="mb-2 font-black tracking-tighter text-6xl">
-             <SlotCounter
-               value={staticData.totalScrapped + stats.productCount}
-               duration={1}
-               autoAnimationStart={true}
-               startValue={0}
-             />
-          </Typography>
-          <Typography variant="h6" className="font-bold text-gray-400 uppercase tracking-[0.2em] text-xs">
-            total aggregated data
-          </Typography>
-        </CardBody>
-      </Card>
+        </div>
+      )}
 
-      {/* Charts */}
-      <div className="mb-6 grid grid-cols-1 gap-y-12 gap-x-6 md:grid-cols-2 xl:grid-cols-3">
-        {statisticsChartsData2.map((props) => (
-          <StatisticsChart
-            key={props.title}
-            {...props}
-            footer={
-              <Typography
-                variant="small"
-                className="flex items-center font-normal text-blue-gray-600"
-              >
-                <ClockIcon strokeWidth={2} className="h-4 w-4 text-blue-gray-400" />
-                &nbsp;{props.footer}
-              </Typography>
-            }
-          />
-        ))}
+      {/* 2. MIDDLE ROW: Coverage Analytics */}
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <MapPinIcon className="h-5 w-5 text-gray-500" />
+          <Typography variant="h5" color="blue-gray" className="font-bold">Geographic Coverage Analytics</Typography>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <ProgressCard title="State Coverage" match={matchStates} total={totalStates} progress={stateProgress} color={stateProgress > 90 ? "green" : "orange"} colorClass={stateProgress > 90 ? "text-green-500" : "text-orange-500"} />
+          <ProgressCard title="City Coverage" match={matchCities} total={totalCities} progress={cityProgress} color={cityProgress > 80 ? "green" : (cityProgress > 50 ? "blue" : "orange")} colorClass={cityProgress > 80 ? "text-green-500" : (cityProgress > 50 ? "text-blue-500" : "text-orange-500")} />
+          <ProgressCard title="Area Coverage" match={matchAreas} total={totalAreas} progress={areaProgress} color={areaProgress > 80 ? "green" : "blue"} colorClass={areaProgress > 80 ? "text-green-500" : "text-blue-500"} />
+          <ProgressCard title="Category Match" match={matchCategories} total={totalCategories} progress={categoryProgress} color="blue" colorClass="text-blue-500" />
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <DashboardCard
-          title="Product Data"
-          subValue="global historical records"
-          value={staticData.totalScrapped}
-          icon={GlobeAmericasIcon}
-          color="from-gray-400 to-gray-600"
-          link="/dashboard/productdata-report"
-        />
+      {/* 3. BOTTOM ROW: Data Quality / Action Items */}
+      <div>
+        <div className="flex items-center gap-2 mb-4 mt-4">
+          <ChartBarIcon className="h-5 w-5 text-gray-500" />
+          <Typography variant="h5" color="blue-gray" className="font-bold">Data Accuracy (Action Items)</Typography>
+        </div>
 
-        <DashboardCard
-          title="Listing Data"
-          subValue="live google maps api"
-          value={stats.productCount}
-          icon={ArchiveBoxIcon}
-          color="from-gray-400 to-gray-600"
-          link="/dashboard/listingdata-report"
-        />
-      </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <DashboardCard
-          title="Cities Scrapped"
-          value={stats.cityCount}
-          icon={MapPinIcon}
-          color="from-gray-400 to-gray-600"
-          link="/dashboard/cities-report"
-        />
-        <DashboardCard
-          title="Categories Scrapped"
-          value={stats.categoryCount}
-          icon={TagIcon}
-          color="from-gray-400 to-gray-600"
-          link="/dashboard/categories-report"
-        />
-        
-        {/* --- UPDATED LINKS BELOW --- */}
-        <DashboardCard
-          title="Cities Pending"
-          value={stats.cityCount} // You might want to calculate a pending count specifically later
-          icon={ClockIcon}
-          color="from-gray-400 to-gray-600"
-          link="/dashboard/cities-pending-report" 
-        />
-        <DashboardCard
-          title="Categories Pending"
-          value={stats.categoryCount} // You might want to calculate a pending count specifically later
-          icon={ClockIcon}
-          color="from-gray-400 to-gray-600"
-          link="/dashboard/categories-pending-report"
-        />
-        {/* --------------------------- */}
-        
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card className="border border-gray-200 bg-gradient-to-br from-white to-gray-500/30">
-          <CardBody className="flex items-center justify-between p-6">
-            <div className="flex items-center gap-4">
-              <div className="p-2 bg-gray-100 rounded-lg">
-                <ChartBarIcon className="h-5 w-5 text-green-600" />
+          <Card className="border border-gray-100 shadow-sm">
+            <CardBody className="p-6">
+              <Typography variant="h6" color="blue-gray" className="mb-4">City Health</Typography>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <CheckCircleIcon className="h-5 w-5 text-green-500" />
+                  <Typography className="text-gray-600 font-medium">Matched</Typography>
+                </div>
+                <Typography className="font-bold">{matchCities}</Typography>
               </div>
-              <Typography className="font-bold text-gray-700">total categories</Typography>
-            </div>
-            <Typography variant="h4" color="blue-gray" className="font-black">
-              {stats.categoryCount}
-            </Typography>
-          </CardBody>
-        </Card>
-
-        <Card className="border border-gray-200 bg-gradient-to-br from-white to-gray-500/30">
-          <CardBody className="flex items-center justify-between p-6">
-            <div className="flex items-center gap-4">
-              <div className="p-2 bg-gray-100 rounded-lg">
-                <ChartBarIcon className="h-5 w-5 text-green-600" />
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-2">
+                  <XCircleIcon className="h-5 w-5 text-red-500" />
+                  <Typography className="text-gray-600 font-medium">Errors</Typography>
+                </div>
+                <Typography className="font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded cursor-pointer hover:bg-red-100 transition-colors" title="Click to view city errors">
+                  {unmatchedCities}
+                </Typography>
               </div>
-              <Typography className="font-bold text-gray-700">total areas</Typography>
-            </div>
-            <Typography variant="h4" color="blue-gray" className="font-black">
-              {stats.cityCount}
-            </Typography>
-          </CardBody>
-        </Card>
+              <Progress value={Math.round((matchCities / (matchCities + unmatchedCities || 1)) * 100)} color="green" className="bg-red-100" />
+              <Typography className="text-xs text-center mt-3 text-gray-500">Fix the {unmatchedCities} city errors in the master data</Typography>
+            </CardBody>
+          </Card>
+
+          <Card className="border border-gray-100 shadow-sm md:col-span-2">
+            <CardBody className="p-6">
+              <Typography variant="h6" color="blue-gray" className="mb-4">Category Health</Typography>
+              <div className="flex flex-col md:flex-row gap-8 items-center h-full pb-4">
+
+                <div className="w-full flex-1 space-y-4">
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <Typography className="text-sm font-medium text-gray-600">Matched Categories</Typography>
+                      <Typography className="text-sm font-bold text-green-600">{matchCategories}</Typography>
+                    </div>
+                    <Progress value={Math.round((matchCategories / (matchCategories + unmatchedCategories || 1)) * 100)} color="blue" className="bg-gray-100" />
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <Typography className="text-sm font-medium text-gray-600">Unmatched (New Categories)</Typography>
+                      <Typography className="text-sm font-bold text-orange-600">{unmatchedCategories}</Typography>
+                    </div>
+                    <Progress value={Math.round((unmatchedCategories / (matchCategories + unmatchedCategories || 1)) * 100)} color="orange" className="bg-gray-100" />
+                  </div>
+                </div>
+
+                <div className="flex-1 bg-yellow-50/50 p-4 rounded-xl border border-yellow-100">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-1 bg-yellow-100 p-1.5 rounded-lg"><TagIcon className="h-5 w-5 text-yellow-700" /></div>
+                    <div>
+                      <Typography className="font-bold text-yellow-800 text-sm mb-1">Insight Required</Typography>
+                      <Typography className="text-xs text-yellow-700 leading-relaxed">
+                        Your unmatched category rate is quite high ({unmatchedCategories}). This suggests your scraper is finding many new business categories that aren't mapped to your official master list yet. Reviewing these will heavily improve grouping.
+                      </Typography>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </CardBody>
+          </Card>
+
+        </div>
       </div>
 
-      <footer className="mt-auto pt-8 border-t border-gray-200 text-center md:text-left">
-        <Typography variant="small" className="font-medium text-gray-400">
-          &copy; {new Date().getFullYear()} scrapemaster dashboard. all rights reserved.
-        </Typography>
-      </footer>
     </div>
   );
 }

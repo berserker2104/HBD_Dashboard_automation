@@ -16,21 +16,104 @@ import {
 import {
   EllipsisVerticalIcon,
   ArrowUpIcon,
+  ClockIcon,
+  CheckCircleIcon,
 } from "@heroicons/react/24/outline";
+import {
+  GlobeAmericasIcon,
+  UserGroupIcon,
+  BuildingOfficeIcon,
+  CircleStackIcon
+} from "@heroicons/react/24/solid";
 
 import { StatisticsCard } from "../../widgets/cards/statistics-card.jsx";
 import { StatisticsChart } from "../../widgets/charts/statistics-chart.jsx";
-import { statisticsCardsData } from "../../data/statistics-cards-data.js";
 import { statisticsChartsData } from "../../data/statistics-charts-data.js";
 import { projectsTableData } from "../../data/projects-table-data.js";
 import { ordersOverviewData } from "../../data/orders-overview-data.js";
-import { CheckCircleIcon, ClockIcon } from "@heroicons/react/24/solid";
 
 export function Home() {
+  const [stats, setStats] = React.useState({
+    totalRecords: 0,
+    matchedData: 0,
+    totalCities: 0,
+    totalCategories: 0,
+    loading: true
+  });
+
+  React.useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const response = await fetch("http://localhost:8001/api/report/aggregate");
+        const d = await response.json();
+        if (d.status === "COMPLETED") {
+          setStats({
+            totalRecords: d.summary?.total_count || 0,
+            matchedData: d.summary?.match_count || 0,
+            totalCities: d.cities?.length || 0,
+            totalCategories: d.categories?.length || 0,
+            loading: false
+          });
+        }
+      } catch (error) {
+        console.error("Error fetching home stats:", error);
+        setStats(prev => ({ ...prev, loading: false }));
+      }
+    };
+    fetchStats();
+  }, []);
+
+  const dynamicCards = [
+    {
+      color: "gray",
+      icon: CircleStackIcon,
+      title: "Total Records",
+      value: stats.totalRecords.toLocaleString(),
+      footer: {
+        color: "text-green-500",
+        value: "Live",
+        label: "from database",
+      },
+    },
+    {
+      color: "gray",
+      icon: UserGroupIcon,
+      title: "Matched Records",
+      value: stats.matchedData.toLocaleString(),
+      footer: {
+        color: "text-green-500",
+        value: "Verified",
+        label: "leads",
+      },
+    },
+    {
+      color: "gray",
+      icon: BuildingOfficeIcon,
+      title: "Total Cities",
+      value: stats.totalCities.toLocaleString(),
+      footer: {
+        color: "text-blue-500",
+        value: "Regional",
+        label: "coverage",
+      },
+    },
+    {
+      color: "gray",
+      icon: GlobeAmericasIcon,
+      title: "Total Categories",
+      value: stats.totalCategories.toLocaleString(),
+      footer: {
+        color: "text-green-500",
+        value: "B2B",
+        label: "diversified",
+      },
+    },
+  ];
+
   return (
     <div className="mt-12">
       <div className="mb-12 grid gap-y-10 gap-x-6 md:grid-cols-2 xl:grid-cols-4">
-        {statisticsCardsData.map(({ icon, title, footer, ...rest }) => (
+        {dynamicCards.map(({ icon, title, footer, ...rest }) => (
           <StatisticsCard
             key={title}
             {...rest}
@@ -126,8 +209,8 @@ export function Home() {
                 {projectsTableData.map(
                   ({ img, name, members, budget, completion }, key) => {
                     const className = `py-3 px-5 ${key === projectsTableData.length - 1
-                        ? ""
-                        : "border-b border-blue-gray-50"
+                      ? ""
+                      : "border-b border-blue-gray-50"
                       }`;
 
                     return (
@@ -217,8 +300,8 @@ export function Home() {
                 <div key={title} className="flex items-start gap-4 py-3">
                   <div
                     className={`relative p-1 after:absolute after:-bottom-6 after:left-2/4 after:w-0.5 after:-translate-x-2/4 after:bg-blue-gray-50 after:content-[''] ${key === ordersOverviewData.length - 1
-                        ? "after:h-0"
-                        : "after:h-4/6"
+                      ? "after:h-0"
+                      : "after:h-4/6"
                       }`}
                   >
                     {React.createElement(icon, {

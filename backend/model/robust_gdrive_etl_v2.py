@@ -202,15 +202,20 @@ class GDriveHighSpeedIngestor:
             # Needs processing
             return True
 
-    def scanner_producer(self, folder_id, folder_name, path=""):
+    def scanner_producer(self, folder_id, folder_name, path="", modified_time=None):
         if self.shutdown_event.is_set(): return
         
-        # Check if folder is already fully processed in db
+        # Performance Optimization: Only skip if folder is in registry AND modified time matches
         recorded_mod = self.folder_registry.get(folder_id)
-        # If it exists, SKIP the folder entirely to prevent re-scanning 125,000 files
-        if recorded_mod:
-            logger.debug(f"⏭ SKIPPING Folder: {folder_name} (Already indexed)")
-            return
+        
+        # Convert GDrive ISO string to DB format for comparison if needed
+        # (Assuming modified_time is from GDrive API)
+        if recorded_mod and modified_time:
+            # Simple string comparison usually works for GDrive ISO vs what we save
+            # but let's be careful. If they match, we've already done this folder.
+            if str(recorded_mod).split('+')[0] == str(modified_time).replace('T', ' ').replace('Z', '').split('.')[0]:
+                logger.debug(f"⏭ SKIPPING Folder: {folder_name} (Up to date)")
+                return
             
         # 1. Fetch items
         items = self.list_files(folder_id)
@@ -233,12 +238,11 @@ class GDriveHighSpeedIngestor:
             # High-Speed Change Detection (Phase 3) using Cached Registry
             current_hash = self.get_file_hash(item['id'], item.get('modifiedTime', ''))
             
-            if status == 'PROCESSED' and existing_hash == current_hash:
+            if not self.has_file_changed(item['id'], current_hash):
                 folder_skipped += 1
                 continue
                 
             # New, Modified, or Partial file -> Dispatch (Phase 2 & 3)
-            from tasks.gdrive_task.etl_tasks import process_csv_task
             process_csv_task.delay(
                 file_id=item['id'], 
                 file_name=item['name'],
@@ -253,7 +257,7 @@ class GDriveHighSpeedIngestor:
         # Then recursively scan NEWEST SUBFOLDERS (Phase 2)
         for folder in folders:
             if self.shutdown_event.is_set(): break
-            self.scanner_producer(folder['id'], folder['name'], f"{path}/{folder_name}")
+            self.scanner_producer(folder['id'], folder['name'], f"{path}/{folder_name}", folder.get('modifiedTime'))
                 
         # Log Summary for this folder
         if folder_dispatched > 0:
@@ -315,18 +319,47 @@ class GDriveHighSpeedIngestor:
                 logger.warning(f"⚠️ Failed to reset Redis counters: {e}")
 
             logger.info("🎬 Initializing GDrive Orchestrator v6.0 (Celery Mode)...")
-            top_folders = [f for f in self.list_files(ROOT_FOLDER_ID) if f['mimeType'] == 'application/vnd.google-apps.folder']
+            all_root_items = self.list_files(ROOT_FOLDER_ID)
             
-            # Reduced workers for scanning to avoid overhead.
+            top_folders = [f for f in all_root_items if f['mimeType'] == 'application/vnd.google-apps.folder']
+            top_csvs = [f for f in all_root_items if f['name'].lower().endswith('.csv')]
+            
+            # Step 1: Dispatch CSVs in ROOT
+            if top_csvs:
+                from tasks.gdrive_task.etl_tasks import process_csv_task
+                for item in top_csvs:
+                    current_hash = self.get_file_hash(item['id'], item.get('modifiedTime', ''))
+                    if self.has_file_changed(item['id'], current_hash):
+                        process_csv_task.delay(
+                            file_id=item['id'], file_name=item['name'],
+                            folder_id=ROOT_FOLDER_ID, folder_name="ROOT",
+                            path="ROOT", modified_time=item.get('modifiedTime')
+                        )
+                        self.total_dispatched_files += 1
+
+            # Step 2: Scan Subfolders
             with ThreadPoolExecutor(max_workers=8) as executor:
-                futures = [executor.submit(self.scanner_producer, f['id'], f['name'], "ROOT") for f in top_folders]
+                futures = [executor.submit(self.scanner_producer, f['id'], f['name'], "ROOT", f.get('modifiedTime')) for f in top_folders]
                 for f in as_completed(futures):
                     if self.shutdown_event.is_set():
                         logger.info("Shutdown requested. Cancelling remaining scanners.")
                         break
                 self.scanners_finished.set()
-            
-            # Removed redundant Producer-side stats refresh (handled by Celery now)
+
+            # Step 3: Explicitly Re-dispatch ERROR, PENDING, and IN_PROGRESS files (Recovery Phase)
+            with self.engine.connect() as conn:
+                error_files = conn.execute(text("SELECT drive_file_id, filename, drive_folder_id, folder_name, path, modified_time FROM file_registry WHERE status IN ('ERROR', 'PENDING', 'IN_PROGRESS')")).fetchall()
+                if error_files:
+                    logger.info(f"🔄 [RECOVERY] Re-dispatching {len(error_files)} files in ERROR/PENDING/IN_PROGRESS status...")
+                    from tasks.gdrive_task.etl_tasks import process_csv_task
+                    for f in error_files:
+                        process_csv_task.delay(
+                            file_id=f[0], file_name=f[1],
+                            folder_id=f[2] or "UNKNOWN", folder_name=f[3] or "ROOT",
+                            path=f[4] or "ROOT", modified_time=f[5]
+                        )
+                        self.total_dispatched_files += 1
+
             self.first_run = False
             self.save_change_token(self.page_token)
             logger.info("="*60)
@@ -539,6 +572,142 @@ class ValidationQualityProcessor:
                 logger.warning(f"Duplicate hash check failed (non-fatal): {e}")
         return results
 
+    def sync_missing_rows(self):
+        """Finds any rows that failed to sync or were lost, and force syncs them.
+        Runs every 5 minutes during idle time.
+        """
+        now = time.time()
+        if hasattr(self, '_last_missing_sync') and now - self._last_missing_sync < 300:
+            return
+        self._last_missing_sync = now
+
+        try:
+            with self.engine.connect() as conn:
+                logger.debug("🔍 Checking for any missing rows (Gaps between Raw and Clean)...")
+                sql_missing = text("""
+                    SELECT r.id, r.name, r.address, r.website, r.phone_number, 
+                           r.reviews_count, r.reviews_average, r.category, r.subcategory, 
+                           r.city, r.state, r.area, r.created_at
+                    FROM raw_google_map_drive_data r
+                    LEFT JOIN raw_clean_google_map_data c ON r.id = c.raw_id
+                    WHERE c.raw_id IS NULL
+                    LIMIT 2000
+                """)
+                rows = conn.execute(sql_missing).fetchall()
+                if not rows:
+                    return
+
+                logger.info(f"⚠️ Found {len(rows)} missing rows. Force syncing...")
+                clean_batch = []
+                master_batch = []
+                
+                for r in rows:
+                    row_dict = r._asdict() if hasattr(r, '_asdict') else r._mapping
+                    norm_row = UniversalNormalizer.normalize_row_full(dict(row_dict))
+                    norm_row['id'] = row_dict['id']
+                    
+                    for key in ['name', 'address', 'website', 'phone_number', 'category', 'subcategory', 'city', 'state', 'area']:
+                        norm_row[key] = self.safe_str(norm_row.get(key))
+                    
+                    sig_str = f"{norm_row['phone_number']}|{norm_row['name'].lower()}|{norm_row['address'].lower()}|{norm_row['city'].lower()}"
+                    sig_hash = hashlib.md5(sig_str.encode()).hexdigest()
+                    
+                    is_structured, is_valid, missing, invalid, clean_phone = self.validate_row(norm_row)
+                    
+                    dup_check = conn.execute(text("SELECT 1 FROM raw_clean_google_map_data WHERE signature_hash = :h LIMIT 1"), {"h": sig_hash}).fetchone()
+                    is_duplicate = dup_check is not None
+                    
+                    status = "VALID"
+                    if not is_structured: status = "MISSING"
+                    elif is_duplicate: status = "DUPLICATE"
+                    elif not is_valid: status = "INVALID"
+                    
+                    created_at = row_dict.get('created_at') or datetime.now()
+                    
+                    clean_batch.append({
+                        "raw_id": norm_row['id'], "sig_hash": sig_hash, "name": norm_row['name'], "address": norm_row['address'],
+                        "website": norm_row['website'], "phone": norm_row['phone_number'], 
+                        "reviews": self.safe_int(norm_row.get('reviews_count', 0)),
+                        "avg": self.safe_float(norm_row.get('reviews_average', 0.00)),
+                        "cat": norm_row['category'], "sub": norm_row['subcategory'], "city": norm_row['city'],
+                        "state": norm_row['state'], "area": norm_row['area'], "created": created_at,
+                        "val_status": status, 
+                        "clean_status": "CLEANED" if status == "VALID" else "FAILED_VALIDATION" if status != "DUPLICATE" else "DUPLICATE_FOUND", 
+                        "missing": ",".join(missing) if missing else None, 
+                        "invalid": ",".join(invalid) if invalid else None, 
+                        "duplicate_reason": "Exact match detected via signature hash" if status == "DUPLICATE" else None, 
+                        "processed_at": datetime.now()
+                    })
+                    
+                    if status == "VALID":
+                        master_batch.append({
+                            "name": norm_row['name'], "address": norm_row['address'], "website": norm_row['website'],
+                            "phone_number": norm_row['phone_number'], "reviews_count": self.safe_int(norm_row.get('reviews_count', 0)),
+                            "reviews_avg": self.safe_float(norm_row.get('reviews_average', 0.00)), "category": norm_row['category'],
+                            "subcategory": norm_row['subcategory'], "city": norm_row['city'], "state": norm_row['state'],
+                            "area": norm_row['area'], "created_at": created_at
+                        })
+
+                if clean_batch:
+                    with self.engine.begin() as trans_conn:
+                        trans_conn.execute(text("""
+                            INSERT IGNORE INTO raw_clean_google_map_data 
+                            (raw_id, signature_hash, name, address, website, phone_number, reviews_count, reviews_avg,
+                                category, subcategory, city, state, area, created_at,
+                                validation_status, cleaning_status, missing_fields, invalid_format_fields, duplicate_reason, processed_at)
+                            VALUES (:raw_id, :sig_hash, :name, :address, :website, :phone, :reviews, :avg, :cat, :sub, :city, :state, :area, :created,
+                                    :val_status, :clean_status, :missing, :invalid, :duplicate_reason, :processed_at)
+                        """), clean_batch)
+                        
+                        if master_batch:
+                            trans_conn.execute(text("""
+                                INSERT IGNORE INTO g_map_master_table 
+                                (name, address, website, phone_number, reviews_count, reviews_avg, category, subcategory, city, state, area, created_at)
+                                VALUES (:name, :address, :website, :phone_number, :reviews_count, :reviews_avg, :category, :subcategory, :city, :state, :area, :created_at)
+                            """), master_batch)
+                logger.info(f"✅ Automatically synced {len(clean_batch)} missing rows.")
+
+                # ---- NEW MASTER_TABLE GAP SYNC LOGIC ----
+                logger.debug("🔍 Checking for missing rows in Master Table (Gaps between Clean and Master)...")
+                sql_master_gap = text("""
+                    SELECT c.id, c.name, c.address, c.website, c.phone_number, 
+                           c.reviews_count, c.reviews_avg as reviews_avg, c.category, c.subcategory, 
+                           c.city, c.state, c.area, c.created_at
+                    FROM raw_clean_google_map_data c
+                    LEFT JOIN g_map_master_table m ON 
+                        LEFT(c.name, 100) = LEFT(m.name, 100) AND 
+                        c.phone_number = m.phone_number AND 
+                        LEFT(c.city, 50) = LEFT(m.city, 50) AND 
+                        LEFT(c.address, 100) = LEFT(m.address, 100)
+                    WHERE c.validation_status = 'VALID'
+                    AND m.id IS NULL
+                    LIMIT 2000
+                """)
+                master_rows = conn.execute(sql_master_gap).fetchall()
+                if master_rows:
+                    logger.info(f"⚠️ Found {len(master_rows)} VALID rows missing from Master Table. Force syncing...")
+                    mbatch = []
+                    for row in master_rows:
+                        r = row._mapping if hasattr(row, '_mapping') else dict(zip(row.keys(), row))
+                        mbatch.append({
+                            "name": r['name'], "address": r['address'], "website": r['website'],
+                            "phone_number": r['phone_number'], "reviews_count": self.safe_int(r['reviews_count']),
+                            "reviews_avg": self.safe_float(r['reviews_avg']), "category": r['category'],
+                            "subcategory": r['subcategory'], "city": r['city'], "state": r['state'],
+                            "area": r['area'], "created_at": r['created_at'] or datetime.now()
+                        })
+                    
+                    with self.engine.begin() as trans_conn:
+                        trans_conn.execute(text("""
+                            INSERT IGNORE INTO g_map_master_table 
+                            (name, address, website, phone_number, reviews_count, reviews_avg, category, subcategory, city, state, area, created_at)
+                            VALUES (:name, :address, :website, :phone_number, :reviews_count, :reviews_avg, :category, :subcategory, :city, :state, :area, :created_at)
+                        """), mbatch)
+                    logger.info(f"✅ Automatically synced {len(mbatch)} rows to Master Table.")
+
+        except Exception as e:
+            logger.error(f"Missing row sync failed: {e}")
+
     def start_pipeline(self):
         """Main loop for the quality assurance and master sync thread. NEVER exits on error."""
         last_id = self.get_last_processed_id()
@@ -564,6 +733,10 @@ class ValidationQualityProcessor:
                     if not rows:
                         conn.execute(text("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
                         self.consecutive_errors = 0  # Reset on successful idle
+                        
+                        # Background gap sync every 5 minutes when idle
+                        self.sync_missing_rows()
+                        
                         if self.shutdown_event.wait(timeout=10):
                             break
                         continue
@@ -674,29 +847,25 @@ class ValidationQualityProcessor:
                             logger.warning(f"Row validation failed (skipping): {str(row_err)[:100]}")
                             continue
 
-                    # 4. Execute Batch Writes — each INSERT is individually protected
+                    # 4. Execute Batch Writes — Atomic Transaction
+                    # We REMOVED the try-except blocks here because we want the transaction 
+                    # to fail if either table cannot be updated. This prevents GAPs.
                     if clean_data_batch:
-                        try:
-                            conn.execute(text("""
-                                INSERT IGNORE INTO raw_clean_google_map_data 
-                                (raw_id, name, address, website, phone_number, reviews_count, reviews_avg,
-                                 category, subcategory, city, state, area, created_at,
-                                 validation_status, cleaning_status, missing_fields, invalid_format_fields, duplicate_reason, processed_at)
-                                VALUES (:raw_id, :sig_hash, :name, :address, :website, :phone, :reviews, :avg, :cat, :sub, :city, :state, :area, :created,
-                                        :val_status, :clean_status, :missing, :invalid, :duplicate_reason, :processed_at)
-                            """), clean_data_batch)
-                        except Exception as e:
-                            logger.warning(f"Clean table batch insert failed (non-fatal): {str(e)[:200]}")
+                        conn.execute(text("""
+                            INSERT IGNORE INTO raw_clean_google_map_data 
+                            (raw_id, signature_hash, name, address, website, phone_number, reviews_count, reviews_avg,
+                                category, subcategory, city, state, area, created_at,
+                                validation_status, cleaning_status, missing_fields, invalid_format_fields, duplicate_reason, processed_at)
+                            VALUES (:raw_id, :sig_hash, :name, :address, :website, :phone, :reviews, :avg, :cat, :sub, :city, :state, :area, :created,
+                                    :val_status, :clean_status, :missing, :invalid, :duplicate_reason, :processed_at)
+                        """), clean_data_batch)
                         
                     if master_data_batch:
-                        try:
-                            conn.execute(text("""
-                                INSERT IGNORE INTO g_map_master_table 
-                                (name, address, website, phone_number, reviews_count, reviews_avg, category, subcategory, city, state, area, created_at)
-                                VALUES (:name, :address, :website, :phone_number, :reviews_count, :reviews_avg, :category, :subcategory, :city, :state, :area, :created_at)
-                            """), master_data_batch)
-                        except Exception as e:
-                            logger.warning(f"Master table batch insert failed (non-fatal): {str(e)[:200]}")
+                        conn.execute(text("""
+                            INSERT IGNORE INTO g_map_master_table 
+                            (name, address, website, phone_number, reviews_count, reviews_avg, category, subcategory, city, state, area, created_at)
+                            VALUES (:name, :address, :website, :phone_number, :reviews_count, :reviews_avg, :category, :subcategory, :city, :state, :area, :created_at)
+                        """), master_data_batch)
 
                 # 5. Finalize batch — ALWAYS advance the cursor
                 batch_summary['last_id'] = current_max_id

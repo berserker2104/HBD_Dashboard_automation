@@ -221,50 +221,35 @@ def commit_batch(batch, task_id=None, **kwargs):
 
     from redis import Redis
     
-    # 1. Deduplicate using Redis to avoid InnoDB gap-lock deadlocks on INSERT IGNORE
-    # We use a Redis TTL-based key (3 days) to quickly filter out exact duplicates
-    # before they even hit the MySQL database, while keeping RAM usage bounded.
+    unique_batch = []
     try:
         r = Redis.from_url(os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0"))
         
-        unique_batch = []
         for row in batch:
-            # Create a unique deterministic identity for the row
-            identity_string = f"{row.get('name', '')}|{row.get('phone_number', '')}|{row.get('address', '')}".lower().strip()
-            row_hash = hashlib.md5(identity_string.encode('utf-8')).hexdigest()
-            redis_key = f"gdrive_etl_dedup:{row_hash}"
+            # Check if this exact row has been processed recently using the 11-column signature
+            redis_key = f"gdrive_etl_dedup:{row['row_signature']}"
             
-            # Check if this exact row has been processed recently
-            # SET NX EX 259200 sets the key for 3 days, returning True if it was set (meaning it's new)
+            # SET NX EX 259200 (3 days)
             is_new = r.set(redis_key, "1", nx=True, ex=259200)
             
             if is_new:
                 unique_batch.append(row)
-            else:
-                # Row is a duplicate, skip it entirely
-                pass
                 
-        # If the entire batch was duplicates, return early
         if not unique_batch:
             return 0
             
     except Exception as e:
-        logger.warning(f"Redis deduplication failed, falling back to MySQL INSERT IGNORE: {e}")
-        unique_batch = batch # Fallback to sending all rows to MySQL if Redis fails
+        logger.warning(f"Redis deduplication failed, fallback to MySQL: {e}")
+        unique_batch = batch 
         
-    # Sort the batch by the unique index columns to prevent InnoDB Deadlocks.
-    # Concurrent transactions locking index records in the same order avoid deadlocks.
-    unique_batch.sort(key=lambda x: (
-        str(x.get('name', '')), 
-        str(x.get('address', '')), 
-        str(x.get('phone_number', ''))
-    ))
+    # Prevent InnoDB deadlocks by sorting the data
+    unique_batch.sort(key=lambda x: str(x.get('row_signature', '')))
 
     max_retries = 3
     for attempt in range(max_retries):
         try:
             with engine.begin() as conn:
-                result = conn.execute(sql, batch)
+                result = conn.execute(sql, unique_batch)
                 inserted = result.rowcount
                 if inserted > 0:
                     rows_inserted.inc(inserted)
@@ -296,10 +281,9 @@ def commit_batch(batch, task_id=None, **kwargs):
     return 0
 
 
-def update_file_checkpoint(file_id, filename, status, row_number=0, error_msg=None, file_hash=None):
+def update_file_checkpoint(file_id, filename, status, row_number=0, error_msg=None, file_hash=None, folder_id=None):
     """
     Updates file status and row checkpoint for crash-safe resumption.
-    If conn is provided, uses it (for transactional atomicity).
     """
     try:
         sql = text("""
@@ -312,12 +296,12 @@ def update_file_checkpoint(file_id, filename, status, row_number=0, error_msg=No
                 file_hash = COALESCE(VALUES(file_hash), file_hash),
                 processed_at = NOW()
         """)
-        if conn:
+        with engine.begin() as conn:
             conn.execute(sql, {
                 "file_id": file_id,
                 "filename": filename,
+                "folder_id": folder_id,
                 "status": status,
-                "row_num": row_number,
                 "error_msg": str(error_msg)[:2000] if error_msg else None,
                 "file_hash": file_hash
             })
@@ -365,39 +349,54 @@ def send_to_dlq(file_id, file_name, error, task_id, retry_count=0):
 # SECTION 6: Dashboard Stats Refresh — Zero Downtime
 @shared_task(name="tasks.gdrive.refresh_stats", ignore_result=True)
 def refresh_dashboard_stats():
-    """Recalculates dashboard statistics using UPSERT logic."""
-    try:
-        with engine.begin() as conn:
-            # 1. UPSERT Global Summary (id=1)
-            res = conn.execute(text("SELECT COUNT(*), COUNT(DISTINCT state), COUNT(DISTINCT category), COUNT(DISTINCT drive_file_id) FROM raw_google_map_drive_data")).fetchone()
+    """Recalculates dashboard statistics using UPSERT logic. Fully guarded with Redis lock."""
+    # Use a distributed lock to prevent multiple stats refresh tasks from overlapping
+    lock_name = "lock:stats_refresh"
+    with redis_lock(lock_name, timeout=600):
+        try:
+            logger.info("📊 Starting Dashboard Stats Refresh...")
             
-            conn.execute(text("""
-                INSERT INTO dashboard_stats_summary_v5 
-                (id, total_records, total_states, total_categories, total_csvs, last_updated)
-                VALUES (1, :total, :states, :cats, :csvs, NOW())
-                ON DUPLICATE KEY UPDATE 
-                    total_records = VALUES(total_records),
-                    total_states = VALUES(total_states),
-                    total_categories = VALUES(total_categories),
-                    total_csvs = VALUES(total_csvs),
-                    last_updated = NOW()
-            """), {"total": res[0], "states": res[1], "cats": res[2], "csvs": res[3]})
+            # Use separate connections/transactions to minimize lock time
+            # 1. UPSERT Global Summary (id=1)
+            with engine.connect() as conn:
+                with conn.begin():
+                    # Move SELECT inside the transaction or use the connection directly
+                    res = conn.execute(text("SELECT COUNT(*), COUNT(DISTINCT state), COUNT(DISTINCT category), COUNT(DISTINCT drive_file_id) FROM raw_google_map_drive_data")).fetchone()
+                    
+                    conn.execute(text("""
+                        INSERT INTO dashboard_stats_summary_v5 
+                        (id, total_records, total_states, total_categories, total_csvs, last_updated)
+                        VALUES (1, :total, :states, :cats, :csvs, NOW())
+                        ON DUPLICATE KEY UPDATE 
+                            total_records = VALUES(total_records),
+                            total_states = VALUES(total_states),
+                            total_categories = VALUES(total_categories),
+                            total_csvs = VALUES(total_csvs),
+                            last_updated = NOW()
+                    """), {"total": res[0], "states": res[1], "cats": res[2], "csvs": res[3]})
 
             # 2. UPSERT State-Category Summary
-            conn.execute(text("SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED"))
-            conn.execute(text("""
-                INSERT INTO state_category_summary_v5 (state, category, record_count)
-                SELECT state, category, COUNT(*) 
-                FROM raw_google_map_drive_data 
-                GROUP BY state, category
-                ON DUPLICATE KEY UPDATE 
-                    record_count = VALUES(record_count)
-            """))
-            conn.execute(text("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
-            
-        logger.info("Dashboard stats refreshed successfully without locking tables.")
-    except Exception as e:
-        logger.warning(f"Stats Refresh Failed (non-fatal): {e}")
+            with engine.connect() as conn:
+                with conn.begin():
+                    conn.execute(text("SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED"))
+                    conn.execute(text("""
+                        INSERT INTO state_category_summary_v5 (state, category, record_count)
+                        SELECT state, category, COUNT(*) 
+                        FROM raw_google_map_drive_data 
+                        WHERE state IS NOT NULL AND category IS NOT NULL
+                          AND state != '' AND category != ''
+                        GROUP BY state, category
+                        ON DUPLICATE KEY UPDATE 
+                            record_count = VALUES(record_count)
+                    """))
+                    # Note: Using NullPool, so setting isolation back to default isn't strictly necessary as connection closes.
+                
+            logger.info("✅ Dashboard stats refreshed successfully.")
+        except Exception as e:
+            if "Lock wait" in str(e):
+                logger.debug(f"Stats Refresh skipped: Another process is holding the lock.")
+            else:
+                logger.warning(f"Stats Refresh Failed (non-fatal): {e}")
 
 def trigger_stats_refresh():
     """Call this inside process_csv_task on success. Fully guarded — never throws."""
@@ -512,7 +511,7 @@ def process_csv_task(self, file_id, file_name, folder_id, folder_name, path, mod
     except Exception as e:
         err_msg = str(e)
         logger.error(f"[ERROR] processing {file_name}: {err_msg}", extra={'task_id': task_id})
-        update_file_status(file_id, file_name, 'ERROR', err_msg, file_hash=file_hash, folder_id=folder_id)
+        update_file_checkpoint(file_id, file_name, 'ERROR', error_msg=err_msg, file_hash=file_hash, folder_id=folder_id)
         
         # Fix 4: Route to DLQ on final retry
         if self.request.retries >= self.max_retries:

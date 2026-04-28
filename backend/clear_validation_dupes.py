@@ -18,20 +18,20 @@ engine = create_engine(
 )
 
 def clear_duplicates():
-    print(f"🚀 Cleaning validation_raw_google_map...")
+    print(f"🚀 Cleaning raw_clean_google_map_data...")
     start_time = time.time()
     
     with engine.begin() as conn:
         conn.execute(text("SET SESSION sql_mode=''"))
         
         # Check count first
-        count_res = conn.execute(text("SELECT COUNT(*) FROM validation_raw_google_map WHERE validation_status = 'DUPLICATE'"))
+        count_res = conn.execute(text("SELECT COUNT(*) FROM raw_clean_google_map_data WHERE validation_status = 'DUPLICATE'"))
         count = count_res.fetchone()[0]
-        print(f"📊 Found {count} rows with status 'DUPLICATE'")
+        print(f"📊 Found {count} rows with status 'DUPLICATE' in clean table")
         
         if count > 0:
             print(f"🗑️ Deleting {count} rows...")
-            res = conn.execute(text("DELETE FROM validation_raw_google_map WHERE validation_status = 'DUPLICATE'"))
+            res = conn.execute(text("DELETE FROM raw_clean_google_map_data WHERE validation_status = 'DUPLICATE'"))
             print(f"✅ Deleted {res.rowcount} rows.")
         else:
             print("✅ No rows with status 'DUPLICATE' found.")

@@ -16,7 +16,7 @@ def fetch_atm_data():
         query = ATM.query
 
         if search:
-            query = query.filter(ATM.name.ilike(f"%{search}%"))
+            query = query.filter(ATM.bank.ilike(f"%{search}%"))
         
         if city_filter:
             query = query.filter(ATM.city.ilike(f"%{city_filter}%"))

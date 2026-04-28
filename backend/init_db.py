@@ -16,8 +16,8 @@ load_dotenv('.env')
 def init_db():
     print("🔌 Connecting to database...")
     DB_USER = os.getenv('DB_USER')
-DB_PASS = getattr(config, "DB_PASSWORD", "")
-#     DB_PASS = quote_plus(os.getenv('DB_PASSWORD_PLAIN') or '')  # REFACTORED: Now using config.py
+    DB_PASS = getattr(config, "DB_PASSWORD", "")
+    # DB_PASS = quote_plus(os.getenv('DB_PASSWORD_PLAIN') or '')  # REFACTORED: Now using config.py
     DB_HOST = os.getenv('DB_HOST')
     DB_NAME = os.getenv('DB_NAME')
     DB_PORT = os.getenv('DB_PORT', '3306')

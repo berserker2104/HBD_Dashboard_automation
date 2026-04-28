@@ -50,6 +50,7 @@ import CleanListingMaster from "./componunts/clean master data/CleanListingMaste
 import CleanProductMaster from "./componunts/clean master data/CleanProductMaster";
 import ListingCategory from "./componunts/masterdata/ListingCategory";
 import ReportDashboard from "./componunts/ReportDashboard";
+import AggregateReport from "./componunts/AggregateReport";
 import ListingDataReport from "./componunts/ListingDataReport";
 import ProductDataReport from "./componunts/ProductDataReport";
 import MisReportTable from "./componunts/Misreport";
@@ -168,8 +169,14 @@ export const routes = [
         name: "Data Report",
         path: "/home2",
         element: <ReportDashboard />,
-       
-      }, {
+      }, 
+      {
+        icon: <ChartBarIcon {...icon}/>,
+        name: "REPORT",
+        path: "/report-data",
+        element: <AggregateReport />,
+      }, 
+      {
         icon: <ChartBarIcon {...icon}/>,
         name: "Master Dashboard",
         path: "/masterdata/dashboard",

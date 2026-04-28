@@ -4,7 +4,35 @@ from werkzeug.utils import secure_filename
 import os 
 from utils.storage import get_upload_base_dir
 
+from model.product_model.additional_products import IndiaMart
+
 indiamart_bp = Blueprint("indiamart_bp",__name__)
+
+@indiamart_bp.route('/fetch-data', methods=['GET'])
+def fetch_indiamart_data():
+    try:
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 10, type=int)
+        search = request.args.get('search', '')
+        category = request.args.get('category', '')
+
+        query = IndiaMart.query
+        
+        if search:
+            query = query.filter(IndiaMart.title.ilike(f"%{search}%"))
+        if category:
+            query = query.filter(IndiaMart.categoryName.ilike(f"%{category}%"))
+        
+        pagination = query.paginate(page=page, per_page=limit, error_out=False)
+        return jsonify({
+            "status": "success",
+            "data": [item.to_dict() for item in pagination.items],
+            "total_pages": pagination.pages,
+            "total_count": pagination.total,
+            "current_page": page
+        }), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @indiamart_bp.route("/upload/india-mart-data",methods=["POST"])
 def upload_india_mart_products_route():

@@ -88,11 +88,11 @@ const MasterData = () => {
         search: search,
       });
 
-      const response = await fetch(`https://dashboard.cityhangaround.com/api/master_table/list?${queryParams}`, {
+      const response = await fetch(`http://localhost:8001/master_table/list?${queryParams}`, {
         method: "GET",
+        credentials: 'include',
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${localStorage.getItem("token") || ""}`
         }
       });
       
