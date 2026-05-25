@@ -55,6 +55,7 @@ import AggregateReport from "./componunts/AggregateReport";
 import ListingDataReport from "./componunts/ListingDataReport";
 import ProductDataReport from "./componunts/ProductDataReport";
 import MisReportTable from "./componunts/Misreport";
+import ProductDetails from "./componunts/ProductDetails";
 import AmazonScraper from "./componunts/scrapper/AmazonScrapper";
 import OthersDataImport from "./componunts/data import/OthersDataImport";
 import SearchKeyword from "./componunts/SearchKeyword";
@@ -139,8 +140,8 @@ export const routes = [
         hidden: true,
       },
       {
-        path: "/productdata-report",
-        element: <ProductDataReport />,
+        path: "/productdata-report/products/:asin",
+        element: <ProductDetails />,
         hidden: true,
       },
       {
@@ -168,9 +169,21 @@ export const routes = [
       {
         icon: <HomeIcon {...icon} />,
         name: "Data Report",
-        path: "/home2",
-        element: <ReportDashboard />,
-      }, 
+        children: [
+          {
+            icon: <ChartBarIcon {...icon} />,
+            name: "Overview",
+            path: "/home2",
+            element: <ReportDashboard />,
+          },
+          {
+            icon: <ShoppingCartIcon {...icon} />,
+            name: "Product Data Report",
+            path: "/productdata-report",
+            element: <ProductDataReport />,
+          },
+        ],
+      },
       {
         icon: <ChartBarIcon {...icon}/>,
         name: "REPORT",

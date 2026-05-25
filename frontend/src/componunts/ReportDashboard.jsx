@@ -26,6 +26,7 @@ export function ReportDashboard() {
   const [stats, setStats] = useState({
     loading: true,
     data: null,
+    topCitiesBusinessData: [],
   });
 
   useEffect(() => {
@@ -39,6 +40,7 @@ export function ReportDashboard() {
           setStats({
             loading: false,
             data: d.summary,
+            topCitiesBusinessData: d.top_cities_business_data || [],
           });
         } else {
           setStats((prev) => ({ ...prev, loading: false }));
@@ -103,6 +105,14 @@ export function ReportDashboard() {
         <Progress value={progress} color={color} size="sm" className="rounded-full bg-gray-100" />
       </CardBody>
     </Card>
+  );
+
+  const topCitiesBusinessData = stats.topCitiesBusinessData || [];
+  const topCitiesWithBusiness = topCitiesBusinessData.filter(
+    (city) => Number(city.business_count || 0) > 0
+  );
+  const pendingCities = topCitiesBusinessData.filter(
+    (city) => Number(city.business_count || 0) === 0
   );
 
   return (
@@ -270,6 +280,93 @@ export function ReportDashboard() {
 
         </div>
       </div>
+
+      {topCitiesWithBusiness.length > 0 && (
+        <div className="mt-8">
+          <div className="flex items-center gap-2 mb-4">
+            <MapPinIcon className="h-5 w-5 text-gray-500" />
+            <Typography variant="h5" color="blue-gray" className="font-bold">
+              Top Cities Business Data
+            </Typography>
+          </div>
+
+          <Card className="h-full w-full overflow-scroll border border-gray-100 shadow-sm max-h-[500px]">
+            <table className="w-full min-w-max table-auto text-left">
+              <thead>
+                <tr>
+                  {["City Rank", "City Name", "State Name", "Business Count"].map((heading) => (
+                    <th key={heading} className="border-b border-blue-gray-100 bg-blue-gray-50 p-4 sticky top-0 z-10">
+                      <Typography variant="small" color="blue-gray" className="font-bold leading-none opacity-70">
+                        {heading}
+                      </Typography>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {topCitiesWithBusiness.map((cityData, index) => (
+                  <tr key={index} className="hover:bg-gray-50 transition-colors">
+                    <td className="p-4 border-b border-blue-gray-50">
+                      <Typography variant="small" color="blue-gray">{cityData.city_rank}</Typography>
+                    </td>
+                    <td className="p-4 border-b border-blue-gray-50">
+                      <Typography variant="small" color="blue-gray">{cityData.city_name}</Typography>
+                    </td>
+                    <td className="p-4 border-b border-blue-gray-50">
+                      <Typography variant="small" color="blue-gray">{cityData.state_name}</Typography>
+                    </td>
+                    <td className="p-4 border-b border-blue-gray-50">
+                      <Typography variant="small" color="blue-gray">{Number(cityData.business_count || 0).toLocaleString()}</Typography>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      )}
+
+      {pendingCities.length > 0 && (
+        <div className="mt-8">
+          <div className="flex items-center gap-2 mb-4">
+            <ExclamationTriangleIcon className="h-5 w-5 text-orange-500" />
+            <Typography variant="h5" color="blue-gray" className="font-bold">
+              Pending Cities Data
+            </Typography>
+          </div>
+
+          <Card className="h-full w-full overflow-scroll border border-gray-100 shadow-sm max-h-[500px]">
+            <table className="w-full min-w-max table-auto text-left">
+              <thead>
+                <tr>
+                  {["City Rank", "City Name", "State Name"].map((heading) => (
+                    <th key={heading} className="border-b border-blue-gray-100 bg-orange-50 p-4 sticky top-0 z-10">
+                      <Typography variant="small" color="blue-gray" className="font-bold leading-none opacity-70">
+                        {heading}
+                      </Typography>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pendingCities.map((cityData, index) => (
+                  <tr key={index} className="hover:bg-orange-50/30 transition-colors">
+                    <td className="p-4 border-b border-blue-gray-50">
+                      <Typography variant="small" className="font-normal text-orange-800">{cityData.city_rank}</Typography>
+                    </td>
+                    <td className="p-4 border-b border-blue-gray-50">
+                      <Typography variant="small" className="font-normal text-orange-800">{cityData.city_name}</Typography>
+                    </td>
+                    <td className="p-4 border-b border-blue-gray-50">
+                      <Typography variant="small" className="font-normal text-orange-800">{cityData.state_name}</Typography>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      )}
 
     </div>
   );

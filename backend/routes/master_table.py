@@ -119,8 +119,13 @@ def get_master_dashboard_stats():
         ]
 
         # Top 10 cities
-        city_query = text(f"SELECT city as name, COUNT(*) as count FROM {TABLE} WHERE city IS NOT NULL AND city != '' GROUP BY city ORDER BY count DESC LIMIT 10")
-        top_cities = [dict(row._mapping) for row in session.execute(city_query)]
+        try:
+            city_query = text("SELECT city_name as name, business_count as count FROM Top_cities_rank ORDER BY city_rank ASC LIMIT 10")
+            top_cities = [dict(row._mapping) for row in session.execute(city_query)]
+        except Exception as e:
+            # Fallback
+            city_query = text(f"SELECT city as name, COUNT(*) as count FROM {TABLE} WHERE city IS NOT NULL AND city != '' GROUP BY city ORDER BY count DESC LIMIT 10")
+            top_cities = [dict(row._mapping) for row in session.execute(city_query)]
         
         # Top 5 subcategories
         sub_query = text(f"""

@@ -90,6 +90,8 @@ from routes.gdrive_etl_routes.validation_dashboard import validation_dashboard_b
 from routes.gdrive_etl_routes.dashboard_stats import dashboard_bp
 from routes.report_aggregate_routes import report_aggregate_bp
 from routes.unmatched_data_routes import unmatched_data_bp
+from routes.listing_upload_routes import listing_upload_bp
+from routes.product_report_routes import product_report_bp
 
 # --- Initialize App ---
 load_dotenv(override=True)
@@ -107,9 +109,15 @@ with app.app_context():
     try:
         db.session.execute(db.text('SELECT 1'))
         db_host = os.getenv('DB_HOST', 'localhost')
-        print(f"✅ DATABASE CONNECTION: SUCCESS (Connected to {db_host})")
+        try:
+            print(f"✅ DATABASE CONNECTION: SUCCESS (Connected to {db_host})")
+        except UnicodeEncodeError:
+            print(f"[SUCCESS] DATABASE CONNECTION: Connected to {db_host}")
     except Exception as e:
-        print(f"❌ DATABASE CONNECTION: FAILED! Error: {e}")
+        try:
+            print(f"❌ DATABASE CONNECTION: FAILED! Error: {e}")
+        except UnicodeEncodeError:
+            print(f"[FAILED] DATABASE CONNECTION! Error: {e}")
 
     db.create_all()
   
@@ -117,7 +125,10 @@ with app.app_context():
 
     try:
         from utils.db_migrations import run_pending_migrations
-        print("🔄 Running Database Migrations...")
+        try:
+            print("🔄 Running Database Migrations...")
+        except UnicodeEncodeError:
+            print("Running Database Migrations...")
         run_pending_migrations(app)
     except ImportError:
         pass
@@ -162,6 +173,10 @@ PUBLIC_ROUTES = [
     "/api/unmatched/counts",
     "/api/unmatched/list",
     "/api/unmatched/fix",
+    "/api/listing-upload",
+    "/api/listing-upload/history",
+    "/api/listing-upload/pending",
+    "/api/product-report/top-products",
 ]
 
 @app.before_request
@@ -172,8 +187,8 @@ def protect_all_routes():
     normalized_path = request.path.rstrip('/')
     public_paths = [route.rstrip('/') for route in PUBLIC_ROUTES]
 
-    # Bypass for whitelist or any fetch-data route
-    if normalized_path in public_paths or normalized_path.endswith('/fetch-data'):
+    # Bypass for whitelist, fetch-data routes, or listing-upload / product-report prefix
+    if normalized_path in public_paths or normalized_path.endswith('/fetch-data') or normalized_path.startswith('/api/listing-upload') or normalized_path.startswith('/api/product-report'):
         return None
 
     try:
@@ -202,6 +217,8 @@ app.register_blueprint(dashboard_bp, url_prefix="/stats")
 app.register_blueprint(product_master_bp, url_prefix="/product-master")
 app.register_blueprint(report_aggregate_bp)
 app.register_blueprint(unmatched_data_bp, url_prefix="/api/unmatched")
+app.register_blueprint(listing_upload_bp, url_prefix="/api/listing-upload")
+app.register_blueprint(product_report_bp, url_prefix="/api/product-report")
 
 # --- Register Listing & Product Blueprints (Batch) ---
 blueprints_listing = [
@@ -243,14 +260,20 @@ if __name__ == '__main__':
             pass
 
     def shutdown():
-        print('\n🛑 Shutdown requested...')
+        try:
+            print('\n🛑 Shutdown requested...')
+        except UnicodeEncodeError:
+            print('\n[SHUTDOWN] Shutdown requested...')
         if ingestor:
             ingestor.shutdown()
         sys.exit(0)
 
     # --- Run Flask standard server ---
     try:
-        print("🚀 Starting Flask standard server on port 8001. Press CTRL+C to quit.")
+        try:
+            print("🚀 Starting Flask standard server on port 8001. Press CTRL+C to quit.")
+        except UnicodeEncodeError:
+            print("Starting Flask standard server on port 8001. Press CTRL+C to quit.")
         app.run(host='0.0.0.0', port=8001, debug=False) 
     except KeyboardInterrupt:
         shutdown()

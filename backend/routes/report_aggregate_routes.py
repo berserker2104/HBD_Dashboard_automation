@@ -152,6 +152,24 @@ def get_report_aggregate():
                 except Exception:
                     schema_info[tbl] = "could not describe"
 
+        # ─── 5. Top Cities Rank (from Top_cities_rank table) ──────────────
+        top_cities_business_data = []
+        try:
+            # Check if table exists
+            if _find_table(available_tables, ["top_cities_rank"]):
+                top_cities_rank_rows = session.execute(
+                    text("SELECT city_name, state_name, business_count, city_rank FROM `Top_cities_rank` ORDER BY city_rank ASC")
+                ).fetchall()
+                for row in top_cities_rank_rows:
+                    top_cities_business_data.append({
+                        "city_name": row[0],
+                        "state_name": row[1],
+                        "business_count": row[2],
+                        "city_rank": row[3]
+                    })
+        except Exception as e:
+            print(f"[WARN] Error reading Top_cities_rank: {e}")
+
         return jsonify({
             "status": "COMPLETED",
             "is_remote": is_remote,
@@ -159,6 +177,7 @@ def get_report_aggregate():
             "all_summary_rows": all_summary,
             "cities": cities,
             "categories": categories,
+            "top_cities_business_data": top_cities_business_data,
             "schema_info": schema_info,
             "tables_found": available_tables,
             "tables_used": {

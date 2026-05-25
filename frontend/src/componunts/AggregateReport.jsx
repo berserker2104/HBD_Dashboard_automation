@@ -176,74 +176,7 @@ export function AggregateReport() {
         </div>
       </section>
 
-      {/* --- TOP PERFORMANCE TABLES --- */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
-        {/* Top Cities */}
-        <div className="bg-white rounded-3xl shadow-lg border border-gray-100 overflow-hidden">
-          <div className="px-8 py-6 bg-gradient-to-r from-emerald-500 to-teal-600">
-            <Typography variant="h5" color="white" className="font-black">Top Cities by Verified Leads</Typography>
-          </div>
-          <table className="w-full text-left">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-100">
-                <th className="px-8 py-4 text-[10px] font-black uppercase text-gray-400">City Name</th>
-                <th className="px-8 py-4 text-[10px] font-black uppercase text-gray-400 text-right">Matched / Total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {cities.slice(0, 10).map((c, i) => (
-                <tr key={i} className="hover:bg-gray-50/50 transition-colors">
-                  <td className="px-8 py-4">
-                    <Typography className="font-bold text-blue-gray-900">{c.name}</Typography>
-                  </td>
-                  <td className="px-8 py-4 text-right">
-                    <div className="flex flex-col items-end">
-                      <Typography className="text-emerald-700 font-black">{num(c.match_count).toLocaleString()}</Typography>
-                      <Typography className="text-[10px] text-gray-400 font-bold">/ {num(c.total_count).toLocaleString()}</Typography>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="p-4 bg-gray-50 text-center">
-            <Link to="/dashboard/cities-report" className="text-xs font-black text-emerald-600 uppercase tracking-widest hover:underline">View All {cities.length} Cities</Link>
-          </div>
-        </div>
 
-        {/* Top Categories */}
-        <div className="bg-white rounded-3xl shadow-lg border border-gray-100 overflow-hidden">
-          <div className="px-8 py-6 bg-gradient-to-r from-indigo-500 to-purple-600">
-            <Typography variant="h5" color="white" className="font-black">Top Categories by Verified Leads</Typography>
-          </div>
-          <table className="w-full text-left">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-100">
-                <th className="px-8 py-4 text-[10px] font-black uppercase text-gray-400">Category</th>
-                <th className="px-8 py-4 text-[10px] font-black uppercase text-gray-400 text-right">Matched / Total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {categories.slice(0, 10).map((c, i) => (
-                <tr key={i} className="hover:bg-gray-50/50 transition-colors">
-                  <td className="px-8 py-4">
-                    <Typography className="font-bold text-blue-gray-900">{c.name}</Typography>
-                  </td>
-                  <td className="px-8 py-4 text-right">
-                    <div className="flex flex-col items-end">
-                      <Typography className="text-indigo-700 font-black">{num(c.match_count).toLocaleString()}</Typography>
-                      <Typography className="text-[10px] text-gray-400 font-bold">/ {num(c.total_count).toLocaleString()}</Typography>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="p-4 bg-gray-50 text-center">
-            <Link to="/dashboard/categories-report" className="text-xs font-black text-indigo-600 uppercase tracking-widest hover:underline">View All {categories.length} Categories</Link>
-          </div>
-        </div>
-      </div>
 
       <footer className="pt-12 border-t border-gray-200 text-center pb-8">
         <Typography variant="small" className="font-bold text-blue-gray-300 uppercase tracking-widest">

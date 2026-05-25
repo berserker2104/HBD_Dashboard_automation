@@ -87,7 +87,7 @@ const MasterDataDashboard = () => {
         <ChartBox title="Top 10 Cities" icon={<MapIcon className="w-5 h-5 text-red-400"/>}>
           <BarChart data={dashboardData.top_cities} layout="vertical" barCategoryGap="20%">
             <XAxis type="number" hide />
-            <YAxis dataKey="name" type="category" width={100} tick={{fontSize: 11}} axisLine={false} tickLine={false} />
+            <YAxis dataKey="name" type="category" width={120} tick={{fontSize: 11}} axisLine={false} tickLine={false} />
             <Tooltip cursor={{fill: 'transparent'}} />
             <Bar dataKey="count" fill="#f87171" radius={[0, 4, 4, 0]} />
           </BarChart>
