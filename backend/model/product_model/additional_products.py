@@ -29,17 +29,40 @@ class Blinkit(db.Model):
 class DMart(db.Model):
     __tablename__ = 'dmart_products'
     id = db.Column(db.Integer, primary_key=True)
-    asin = db.Column(db.String(100))
-    title = db.Column(db.Text)
-    imgUrl = db.Column(db.Text)
-    productUrl = db.Column(db.Text)
-    stars = db.Column(db.String(50))
-    reviews = db.Column(db.String(50))
-    price = db.Column(db.String(100))
-    listPrice = db.Column(db.String(100))
-    categoryName = db.Column(db.String(255))
-    isBestSeller = db.Column(db.String(50))
-    boughtInLastMonth = db.Column(db.String(100))
+    asin = db.Column('ASIN', db.String(100))
+    title = db.Column('Product_name', db.Text)
+    imgUrl = db.Column('Image_URLs', db.Text)
+    productUrl = db.Column('link', db.Text)
+    stars = db.Column('rating', db.String(50))
+    reviews = db.Column('Number_of_ratings', db.String(50))
+    price = db.Column('price', db.String(100))
+    categoryName = db.Column('category', db.String(255))
+    brand = db.Column('Brand', db.String(255))
+    description = db.Column('description', db.Text)
+
+    @property
+    def listPrice(self):
+        return self.price
+
+    @listPrice.setter
+    def listPrice(self, value):
+        self.price = value
+
+    @property
+    def isBestSeller(self):
+        return "false"
+
+    @isBestSeller.setter
+    def isBestSeller(self, value):
+        pass
+
+    @property
+    def boughtInLastMonth(self):
+        return "0"
+
+    @boughtInLastMonth.setter
+    def boughtInLastMonth(self, value):
+        pass
 
     def to_dict(self):
         return {

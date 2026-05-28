@@ -44,6 +44,7 @@ from model.product_model.bigbasket_product_model import BigBasket
 from routes.auth_route import auth_bp
 from routes.scraper_routes import scraper_bp
 from routes.amazon_routes import amazon_api_bp
+from routes.dmart_routes import dmart_api_bp
 from routes.googlemap import googlemap_bp 
 from routes.master_table import master_table_bp
 from routes.upload_product_csv import product_csv_bp
@@ -177,6 +178,8 @@ PUBLIC_ROUTES = [
     "/api/listing-upload/history",
     "/api/listing-upload/pending",
     "/api/product-report/top-products",
+    "/api/scrape_dmart",
+    "/api/scrape_amazon",
 ]
 
 @app.before_request
@@ -187,8 +190,8 @@ def protect_all_routes():
     normalized_path = request.path.rstrip('/')
     public_paths = [route.rstrip('/') for route in PUBLIC_ROUTES]
 
-    # Bypass for whitelist, fetch-data routes, or listing-upload / product-report prefix
-    if normalized_path in public_paths or normalized_path.endswith('/fetch-data') or normalized_path.startswith('/api/listing-upload') or normalized_path.startswith('/api/product-report'):
+    # Bypass for whitelist, fetch-data routes, or listing-upload / product-report / tasks prefix
+    if normalized_path in public_paths or normalized_path.endswith('/fetch-data') or normalized_path.startswith('/api/listing-upload') or normalized_path.startswith('/api/product-report') or normalized_path.startswith('/api/tasks'):
         return None
 
     try:
@@ -203,6 +206,7 @@ def protect_all_routes():
 app.register_blueprint(auth_bp, url_prefix="/api/auth")
 app.register_blueprint(scraper_bp, url_prefix="/api")
 app.register_blueprint(amazon_api_bp, url_prefix="/api")
+app.register_blueprint(dmart_api_bp, url_prefix="/api")
 app.register_blueprint(googlemap_bp, url_prefix='/api')
 app.register_blueprint(master_table_bp)
 app.register_blueprint(product_csv_bp)

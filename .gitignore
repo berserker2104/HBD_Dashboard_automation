@@ -33,3 +33,15 @@ backup*.sql*
 .idea/
 *.swp
 *.swo
+
+# Generated Scraper Databases, Sheets, and Logs
+backend/output/*.db
+backend/output/exports/
+backend/logs/
+*.db
+*.sqlite
+*.sqlite3
+*.csv
+*.xlsx
+*.xls
+backend/logs/*.log
