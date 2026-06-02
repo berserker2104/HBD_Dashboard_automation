@@ -39,6 +39,7 @@ from model.unmatched_data_review import UnmatchedDataReview
 # --- Product Models ---
 from model.product_model.amazon_product import AmazonProduct 
 from model.product_model.bigbasket_product_model import BigBasket
+from model.product_model.additional_products import BigBasketNew, Zepto
 
 # --- Import Blueprints ---
 from routes.auth_route import auth_bp
@@ -84,6 +85,7 @@ from routes.product_routes.upload_dmart_route import dmart_bp
 from routes.product_routes.upload_flipkart_products_route import flipkart_bp
 from routes.product_routes.upload_india_mart_route import indiamart_bp
 from routes.product_routes.upload_jio_mart_route import jiomart_bp
+from routes.product_routes.upload_zepto_route import zepto_bp
 from routes.product_master_route import product_master_bp
 # New Dashboard Blueprints
 from routes.gdrive_etl_routes.validation_dashboard import validation_dashboard_bp
@@ -177,6 +179,17 @@ PUBLIC_ROUTES = [
     "/api/listing-upload/history",
     "/api/listing-upload/pending",
     "/api/product-report/top-products",
+    "/api/product-report/dmart/data",
+    "/api/product-report/indiamart/data",
+    "/api/product-report/bigbasket/data",
+    "/api/product-report/zepto/data",
+    "/api/product-report/blinkit/data",
+    "/api/product-report/amazon/data",
+    "/api/product-report/mapping/blinkit",
+    "/api/product-report/mapping/bigbasket",
+    "/api/product-report/mapping/dmart",
+    "/api/product-report/mapping/indiamart",
+    "/api/product-report/mapping/zepto",
 ]
 
 @app.before_request
@@ -229,6 +242,7 @@ blueprints_listing = [
     (nearbuy_bp, "/nearbuy"), (pinda_bp, "/pinda"), (post_office_bp, "/post-office"),
     (schoolgis_bp, "/schoolgis"), (shiksha_bp, "/shiksha"), (yellow_pages_bp, "/yellow-pages"),
     (amazon_upload_bp, "/amazon"), (vivo_bp, "/vivo"), (blinkit_bp, "/blinkit"),
+    (zepto_bp, "/zepto"),
     (dmart_bp, "/dmart"), (flipkart_bp, "/flipkart"), (indiamart_bp, "/india-mart"),
     (jiomart_bp, "/jio-mart"), (bigbasket_bp, "/big-basket"),
     (location_master_bp, "/location-master")

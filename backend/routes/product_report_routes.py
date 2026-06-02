@@ -425,73 +425,183 @@ def get_top_products():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+def _fetch_mapped_categories_union(marketplace, search, limit=200):
+    tables_to_query = []
+    mp_lower = marketplace.lower() if marketplace else 'all'
+    
+    if mp_lower == 'all':
+        tables_to_query = ['amazon', 'blinkit', 'zepto', 'bigbasket', 'indiamart', 'dmart']
+    elif mp_lower == 'amazon':
+        tables_to_query = ['amazon']
+    elif mp_lower == 'blinkit':
+        tables_to_query = ['blinkit']
+    elif mp_lower == 'zepto':
+        tables_to_query = ['zepto']
+    elif mp_lower == 'bigbasket':
+        tables_to_query = ['bigbasket']
+    elif mp_lower == 'indiamart':
+        tables_to_query = ['indiamart']
+    elif mp_lower == 'dmart':
+        tables_to_query = ['dmart']
+        
+    queries = []
+    params = {}
+    
+    for tbl in tables_to_query:
+        if tbl == 'amazon':
+            q = """
+                SELECT 
+                    id, 
+                    CONVERT('Amazon' USING utf8mb4) as marketplace_name, 
+                    CONVERT(category_name USING utf8mb4) as category_name, 
+                    CONVERT(subcategory_name USING utf8mb4) as subcategory_name, 
+                    CONVERT(child_category_name USING utf8mb4) as child_category_name, 
+                    category_level, 
+                    CONVERT(category_path USING utf8mb4) as category_path
+                FROM product_category_master
+                WHERE id NOT IN (
+                    SELECT category_id FROM pending_category_report 
+                    WHERE category_id IS NOT NULL AND LOWER(marketplace_name) = 'amazon'
+                )
+            """
+            if search:
+                q += " AND (category_name LIKE :search OR subcategory_name LIKE :search OR category_path LIKE :search)"
+                params["search"] = f"%{search}%"
+            queries.append(q)
+            
+        elif tbl == 'blinkit':
+            q = """
+                SELECT 
+                    category_id as id,
+                    CONVERT('Blinkit' USING utf8mb4) as marketplace_name,
+                    CONVERT(category_name USING utf8mb4) as category_name,
+                    CAST(NULL AS CHAR) as subcategory_name,
+                    CAST(NULL AS CHAR) as child_category_name,
+                    category_level,
+                    CONVERT(full_category_path USING utf8mb4) as category_path
+                FROM blinkit_mapping
+                WHERE 1=1
+            """
+            if search:
+                q += " AND (category_name LIKE :search OR full_category_path LIKE :search)"
+                params["search"] = f"%{search}%"
+            queries.append(q)
+            
+        elif tbl == 'zepto':
+            q = """
+                SELECT 
+                    `category id` as id,
+                    CONVERT('Zepto' USING utf8mb4) as marketplace_name,
+                    CONVERT(category USING utf8mb4) as category_name,
+                    CAST(NULL AS CHAR) as subcategory_name,
+                    CAST(NULL AS CHAR) as child_category_name,
+                    `category level` as category_level,
+                    CONVERT(`category path` USING utf8mb4) as category_path
+                FROM Zepto_db_mapping
+                WHERE 1=1
+            """
+            if search:
+                q += " AND (category LIKE :search OR `category path` LIKE :search)"
+                params["search"] = f"%{search}%"
+            queries.append(q)
+            
+        elif tbl == 'bigbasket':
+            # Use actual data categories from bigbasket table for correct casing
+            q = """
+                SELECT 
+                    ROW_NUMBER() OVER (ORDER BY main_category) as id,
+                    CONVERT('BigBasket' USING utf8mb4) as marketplace_name,
+                    CONVERT(main_category USING utf8mb4) as category_name,
+                    CAST(NULL AS CHAR) as subcategory_name,
+                    CAST(NULL AS CHAR) as child_category_name,
+                    1 as category_level,
+                    CONVERT(main_category USING utf8mb4) as category_path
+                FROM (
+                    SELECT DISTINCT main_category FROM bigbasket
+                    WHERE main_category IS NOT NULL AND main_category != ''
+                ) AS bb_cats
+                WHERE 1=1
+            """
+            if search:
+                q += " AND (main_category LIKE :search)"
+                params["search"] = f"%{search}%"
+            queries.append(q)
+            
+        elif tbl == 'indiamart':
+            # Use actual data categories from indiamart_products, not the mapping tree
+            q = """
+                SELECT 
+                    ROW_NUMBER() OVER (ORDER BY category_name) as id,
+                    CONVERT('IndiaMart' USING utf8mb4) as marketplace_name,
+                    CONVERT(category_name USING utf8mb4) as category_name,
+                    CAST(NULL AS CHAR) as subcategory_name,
+                    CAST(NULL AS CHAR) as child_category_name,
+                    1 as category_level,
+                    CONVERT(category_name USING utf8mb4) as category_path
+                FROM (
+                    SELECT DISTINCT category_name FROM indiamart_products
+                    WHERE category_name IS NOT NULL AND category_name != ''
+                ) AS indiamart_cats
+                WHERE 1=1
+            """
+            if search:
+                q += " AND (category_name LIKE :search)"
+                params["search"] = f"%{search}%"
+            queries.append(q)
+            
+        elif tbl == 'dmart':
+            q = """
+                SELECT 
+                    category_id as id,
+                    CONVERT('DMart' USING utf8mb4) as marketplace_name,
+                    CONVERT(category_name USING utf8mb4) as category_name,
+                    CAST(NULL AS CHAR) as subcategory_name,
+                    CAST(NULL AS CHAR) as child_category_name,
+                    category_level,
+                    CONVERT(category_path USING utf8mb4) as category_path
+                FROM dmart_categories
+                WHERE 1=1
+            """
+            if search:
+                q += " AND (category_name LIKE :search OR category_path LIKE :search)"
+                params["search"] = f"%{search}%"
+            queries.append(q)
+
+    if not queries:
+        return "", {}
+        
+    combined_query = " UNION ALL ".join(queries)
+    combined_query += " ORDER BY category_path ASC"
+    if limit:
+        combined_query += f" LIMIT {limit}"
+        
+    return combined_query, params
+
+
 @product_report_bp.route('/mapped-categories', methods=['GET'])
 def get_mapped_categories():
     """
-    Fetch mapped categories.
-    A category is mapped if it exists in product_category_master but is not in pending_category_report.
+    Fetch mapped categories across all platforms using UNION.
     """
     marketplace = request.args.get('marketplace', '').strip()
     search = request.args.get('search', '').strip()
     
     try:
-        with engine.connect() as conn:
-            query_str = """
-                SELECT 
-                    id, 
-                    marketplace_name, 
-                    category_name, 
-                    subcategory_name, 
-                    child_category_name, 
-                    category_level, 
-                    category_path
-                FROM product_category_master
-                WHERE id NOT IN (
-                    SELECT category_id FROM pending_category_report 
-                    WHERE category_id IS NOT NULL
-                )
-            """
-            params = {}
-            if marketplace and marketplace.lower() != 'all':
-                query_str = """
-                    SELECT 
-                        id, 
-                        marketplace_name, 
-                        category_name, 
-                        subcategory_name, 
-                        child_category_name, 
-                        category_level, 
-                        category_path
-                    FROM product_category_master
-                    WHERE id NOT IN (
-                        SELECT category_id FROM pending_category_report 
-                        WHERE category_id IS NOT NULL
-                          AND LOWER(marketplace_name) = LOWER(:marketplace)
-                    )
-                    AND LOWER(marketplace_name) = LOWER(:marketplace)
-                """
-                params["marketplace"] = marketplace
-                
-            if search:
-                query_str += " AND (category_name LIKE :search OR subcategory_name LIKE :search OR category_path LIKE :search)"
-                params["search"] = f"%{search}%"
-                
-            query_str += " ORDER BY category_path ASC LIMIT 100"
-            
-            rows = conn.execute(text(query_str), params).mappings().fetchall()
-            
-            data = []
-            for r in rows:
-                data.append({
-                    "id": int(r["id"]),
-                    "marketplace_name": r["marketplace_name"] or "",
-                    "category_name": r["category_name"] or "",
-                    "subcategory_name": r["subcategory_name"] or "",
-                    "child_category_name": r["child_category_name"] or "",
-                    "category_level": int(r["category_level"]) if r["category_level"] is not None else 1,
-                    "category_path": r["category_path"] or ""
-                })
-                
+        query_str, params = _fetch_mapped_categories_union(marketplace, search, limit=100)
+        data = []
+        if query_str:
+            with engine.connect() as conn:
+                rows = conn.execute(text(query_str), params).mappings().fetchall()
+                for r in rows:
+                    data.append({
+                        "id": int(r["id"]),
+                        "marketplace_name": r["marketplace_name"] or "",
+                        "category_name": r["category_name"] or "",
+                        "subcategory_name": r["subcategory_name"] or "",
+                        "child_category_name": r["child_category_name"] or "",
+                        "category_level": int(r["category_level"]) if r["category_level"] is not None else 1,
+                        "category_path": r["category_path"] or ""
+                    })
         return jsonify({"status": "success", "data": data}), 200
         
     except Exception as e:
@@ -753,28 +863,46 @@ def get_product_by_id(marketplace, product_id):
 
 @product_report_bp.route('/refresh', methods=['POST'])
 def refresh_report_summary():
-    """Trigger aggregation logic refresh for Blinkit, BigBasket, and Amazon."""
+    """Trigger aggregation logic refresh for Blinkit, BigBasket, DMart, IndiaMart, Zepto, and Amazon."""
     try:
         with engine.connect() as conn:
             with conn.begin():
-                # 1. Clear existing summaries for Blinkit and BigBasket
-                conn.execute(text("DELETE FROM product_dashboard_report_summary WHERE LOWER(marketplace_name) IN ('blinkit', 'bigbasket')"))
-                conn.execute(text("DELETE FROM product_top_selling_report WHERE LOWER(marketplace_name) IN ('blinkit', 'bigbasket')"))
+                # 1. Clear existing summaries & top reports
+                conn.execute(text("DELETE FROM product_dashboard_report_summary WHERE LOWER(marketplace_name) IN ('blinkit', 'bigbasket', 'dmart', 'indiamart', 'zepto')"))
+                conn.execute(text("DELETE FROM product_top_selling_report WHERE LOWER(marketplace_name) IN ('blinkit', 'bigbasket', 'dmart', 'indiamart', 'zepto')"))
 
                 # 2. Aggregating Blinkit
                 blinkit_stats = conn.execute(text("""
+                    WITH resolved_blinkit AS (
+                        SELECT 
+                            b.product_id,
+                            b.category as raw_category,
+                            COALESCE(
+                                (SELECT parent.category_name 
+                                 FROM blinkit_mapping bm 
+                                 JOIN blinkit_mapping parent ON bm.parent_id = parent.category_id
+                                 WHERE bm.category_name = b.category AND bm.category_level = 2 LIMIT 1),
+                                (SELECT bm.category_name 
+                                 FROM blinkit_mapping bm 
+                                 WHERE bm.category_name = b.category AND bm.category_level = 1 LIMIT 1)
+                            ) as main_category,
+                            b.availability,
+                            b.price,
+                            b.brand
+                        FROM blinkit b
+                    )
                     SELECT 
-                        COUNT(DISTINCT category) as total_categories,
+                        (SELECT COUNT(DISTINCT category_name) FROM blinkit_mapping WHERE category_level = 1) as total_categories,
                         COUNT(*) as total_products,
-                        COUNT(*) as mapped_products,
-                        0 as unmapped_products,
-                        COUNT(DISTINCT category) as completed_categories,
-                        0 as pending_categories,
+                        SUM(CASE WHEN main_category IS NOT NULL THEN 1 ELSE 0 END) as mapped_products,
+                        SUM(CASE WHEN main_category IS NULL THEN 1 ELSE 0 END) as unmapped_products,
+                        COUNT(DISTINCT main_category) as completed_categories,
+                        ((SELECT COUNT(DISTINCT category_name) FROM blinkit_mapping WHERE category_level = 1) - COUNT(DISTINCT main_category)) as pending_categories,
                         SUM(CASE WHEN availability = 1 THEN 1 ELSE 0 END) as available_products,
                         SUM(CASE WHEN availability = 0 THEN 1 ELSE 0 END) as out_of_stock_products,
                         COUNT(DISTINCT brand) as total_brands,
                         AVG(COALESCE(price, 0)) as avg_selling_price
-                    FROM blinkit
+                    FROM resolved_blinkit
                 """)).mappings().fetchone()
 
                 conn.execute(text("""
@@ -792,7 +920,15 @@ def refresh_report_summary():
                         NULL as asin,
                         product_name,
                         brand,
-                        category as category_name,
+                        COALESCE(
+                            (SELECT parent.category_name 
+                             FROM blinkit_mapping bm 
+                             JOIN blinkit_mapping parent ON bm.parent_id = parent.category_id
+                             WHERE bm.category_name = b.category AND bm.category_level = 2 LIMIT 1),
+                            (SELECT bm.category_name 
+                             FROM blinkit_mapping bm 
+                             WHERE bm.category_name = b.category AND bm.category_level = 1 LIMIT 1)
+                        ) as category_name,
                         sub_category as sub_category_name,
                         price,
                         mrp as list_price,
@@ -808,25 +944,37 @@ def refresh_report_summary():
                         product_url,
                         (COALESCE(mrp, 0) - COALESCE(price, 0)) as ranking_score,
                         NOW()
-                    FROM blinkit
+                    FROM blinkit b
                     ORDER BY discount DESC, price DESC
                     LIMIT 50
                 """))
 
-                # 3. Aggregating BigBasket
+                # 3. Aggregating BigBasket (use LOWER() for case-insensitive category matching)
                 bb_stats = conn.execute(text("""
                     SELECT 
-                        COUNT(DISTINCT category) as total_categories,
+                        COUNT(DISTINCT main_category) as total_categories,
                         COUNT(*) as total_products,
-                        COUNT(*) as mapped_products,
-                        0 as unmapped_products,
-                        COUNT(DISTINCT category) as completed_categories,
-                        0 as pending_categories,
+                        SUM(CASE WHEN EXISTS (
+                            SELECT 1 FROM bigbasket_dbmapping bd 
+                            WHERE LOWER(bd.category_name) = LOWER(bb.main_category)
+                        ) THEN 1 ELSE 0 END) as mapped_products,
+                        SUM(CASE WHEN NOT EXISTS (
+                            SELECT 1 FROM bigbasket_dbmapping bd 
+                            WHERE LOWER(bd.category_name) = LOWER(bb.main_category)
+                        ) OR bb.main_category IS NULL THEN 1 ELSE 0 END) as unmapped_products,
+                        COUNT(DISTINCT CASE WHEN EXISTS (
+                            SELECT 1 FROM bigbasket_dbmapping bd 
+                            WHERE LOWER(bd.category_name) = LOWER(bb.main_category)
+                        ) THEN bb.main_category END) as completed_categories,
+                        COUNT(DISTINCT CASE WHEN NOT EXISTS (
+                            SELECT 1 FROM bigbasket_dbmapping bd 
+                            WHERE LOWER(bd.category_name) = LOWER(bb.main_category)
+                        ) OR bb.main_category IS NULL THEN bb.main_category END) as pending_categories,
                         COUNT(*) as available_products,
                         0 as out_of_stock_products,
-                        COUNT(DISTINCT brand) as total_brands,
-                        AVG(COALESCE(CAST(sale_price AS DECIMAL(10,2)), 0)) as avg_selling_price
-                    FROM big_basket
+                        COUNT(DISTINCT SUBSTRING_INDEX(product_name, ' ', 1)) as total_brands,
+                        AVG(COALESCE(selling_price, 0)) as avg_selling_price
+                    FROM bigbasket bb
                 """)).mappings().fetchone()
 
                 conn.execute(text("""
@@ -840,32 +988,213 @@ def refresh_report_summary():
                     (marketplace_name, product_id, asin, product_name, brand, category_name, sub_category_name, price, list_price, discount, stars, reviews, rating_count, is_prime, is_best_seller, bought_in_last_month, availability, img_url, product_url, ranking_score, last_refreshed_at)
                     SELECT 
                         'BigBasket' as marketplace_name,
-                        id as product_id,
+                        sku_id as product_id,
                         NULL as asin,
-                        product as product_name,
-                        brand,
-                        category as category_name,
-                        sub_category as sub_category_name,
-                        CAST(sale_price AS DECIMAL(10,2)) as price,
-                        CAST(market_price AS DECIMAL(10,2)) as list_price,
-                        (CAST(market_price AS DECIMAL(10,2)) - CAST(sale_price AS DECIMAL(10,2))) as discount,
-                        CAST(rating AS DECIMAL(3,2)) as stars,
-                        0 as reviews,
-                        0 as rating_count,
+                        product_name,
+                        SUBSTRING_INDEX(product_name, ' ', 1) as brand,
+                        main_category as category_name,
+                        subcategory as sub_category_name,
+                        selling_price as price,
+                        mrp as list_price,
+                        (COALESCE(mrp, 0) - COALESCE(selling_price, 0)) as discount,
+                        rating as stars,
+                        review as reviews,
+                        review as rating_count,
                         0 as is_prime,
                         0 as is_best_seller,
                         0 as bought_in_last_month,
                         'In Stock' as availability,
                         NULL as img_url,
-                        NULL as product_url,
+                        product_url,
                         (COALESCE(rating, 0) * 100) as ranking_score,
                         NOW()
-                    FROM big_basket
-                    ORDER BY rating DESC, sale_price DESC
+                    FROM bigbasket
+                    ORDER BY rating DESC, selling_price DESC
                     LIMIT 50
                 """))
 
-                # 4. Handle Amazon products in top selling report (using index-backed query + Python English translation)
+                # 4. Aggregating DMart
+                dm_stats = conn.execute(text("""
+                    SELECT 
+                        COUNT(DISTINCT category) as total_categories,
+                        COUNT(*) as total_products,
+                        SUM(CASE WHEN category IN (SELECT category_name FROM dmart_categories WHERE category_name IS NOT NULL) THEN 1 ELSE 0 END) as mapped_products,
+                        SUM(CASE WHEN category NOT IN (SELECT category_name FROM dmart_categories WHERE category_name IS NOT NULL) OR category IS NULL THEN 1 ELSE 0 END) as unmapped_products,
+                        COUNT(DISTINCT CASE WHEN category IN (SELECT category_name FROM dmart_categories WHERE category_name IS NOT NULL) THEN category END) as completed_categories,
+                        COUNT(DISTINCT CASE WHEN category NOT IN (SELECT category_name FROM dmart_categories WHERE category_name IS NOT NULL) OR category IS NULL THEN category END) as pending_categories,
+                        SUM(CASE WHEN availability = 1 THEN 1 ELSE 0 END) as available_products,
+                        SUM(CASE WHEN availability = 0 THEN 1 ELSE 0 END) as out_of_stock_products,
+                        COUNT(DISTINCT Brand) as total_brands,
+                        AVG(COALESCE(CAST(NULLIF(price,'') AS DECIMAL(10,2)),0)) as avg_selling_price
+                    FROM dmart_products
+                """)).mappings().fetchone()
+
+                conn.execute(text("""
+                    INSERT INTO product_dashboard_report_summary 
+                    (marketplace_name, total_categories, total_products, mapped_products, unmapped_products, completed_categories, pending_categories, available_products, out_of_stock_products, total_brands, avg_selling_price, last_refreshed_at)
+                    VALUES ('DMart', :total_categories, :total_products, :mapped_products, :unmapped_products, :completed_categories, :pending_categories, :available_products, :out_of_stock_products, :total_brands, :avg_selling_price, NOW())
+                """), dict(dm_stats))
+
+                conn.execute(text("""
+                    INSERT INTO product_top_selling_report 
+                    (marketplace_name, product_id, asin, product_name, brand, category_name, sub_category_name, price, list_price, discount, stars, reviews, rating_count, is_prime, is_best_seller, bought_in_last_month, availability, img_url, product_url, ranking_score, last_refreshed_at)
+                    SELECT 
+                        'DMart' as marketplace_name,
+                        id as product_id,
+                        ASIN as asin,
+                        Product_name as product_name,
+                        Brand as brand,
+                        category as category_name,
+                        NULL as sub_category_name,
+                        CAST(NULLIF(price,'') AS DECIMAL(10,2)) as price,
+                        CAST(NULLIF(listPrice,'') AS DECIMAL(10,2)) as list_price,
+                        (COALESCE(CAST(NULLIF(listPrice,'') AS DECIMAL(10,2)),0) - COALESCE(CAST(NULLIF(price,'') AS DECIMAL(10,2)),0)) as discount,
+                        NULL as stars,
+                        0 as reviews,
+                        0 as rating_count,
+                        0 as is_prime,
+                        0 as is_best_seller,
+                        0 as bought_in_last_month,
+                        CASE WHEN availability = 1 THEN 'In Stock' ELSE 'Out of Stock' END as availability,
+                        Image_URLs as img_url,
+                        link as product_url,
+                        (COALESCE(CAST(NULLIF(listPrice,'') AS DECIMAL(10,2)),0) - COALESCE(CAST(NULLIF(price,'') AS DECIMAL(10,2)),0)) as ranking_score,
+                        NOW()
+                    FROM dmart_products
+                    ORDER BY CAST(NULLIF(listPrice,'') AS DECIMAL(10,2)) DESC
+                    LIMIT 50
+                """))
+
+                # 5. Aggregating IndiaMart
+                im_stats = conn.execute(text("""
+                    SELECT 
+                        COUNT(DISTINCT category_name) as total_categories,
+                        COUNT(*) as total_products,
+                        SUM(CASE WHEN category_name IN (SELECT category_name FROM indiamart_mappings WHERE category_name IS NOT NULL) THEN 1 ELSE 0 END) as mapped_products,
+                        SUM(CASE WHEN category_name NOT IN (SELECT category_name FROM indiamart_mappings WHERE category_name IS NOT NULL) OR category_name IS NULL THEN 1 ELSE 0 END) as unmapped_products,
+                        COUNT(DISTINCT CASE WHEN category_name IN (SELECT category_name FROM indiamart_mappings WHERE category_name IS NOT NULL) THEN category_name END) as completed_categories,
+                        COUNT(DISTINCT CASE WHEN category_name NOT IN (SELECT category_name FROM indiamart_mappings WHERE category_name IS NOT NULL) OR category_name IS NULL THEN category_name END) as pending_categories,
+                        COUNT(*) as available_products,
+                        0 as out_of_stock_products,
+                        COUNT(DISTINCT manufacturer) as total_brands,
+                        AVG(COALESCE(price_numeric, 0)) as avg_selling_price
+                    FROM indiamart_products
+                """)).mappings().fetchone()
+
+                conn.execute(text("""
+                    INSERT INTO product_dashboard_report_summary 
+                    (marketplace_name, total_categories, total_products, mapped_products, unmapped_products, completed_categories, pending_categories, available_products, out_of_stock_products, total_brands, avg_selling_price, last_refreshed_at)
+                    VALUES ('IndiaMart', :total_categories, :total_products, :mapped_products, :unmapped_products, :completed_categories, :pending_categories, :available_products, :out_of_stock_products, :total_brands, :avg_selling_price, NOW())
+                """), dict(im_stats))
+
+                conn.execute(text("""
+                    INSERT INTO product_top_selling_report 
+                    (marketplace_name, product_id, asin, product_name, brand, category_name, sub_category_name, price, list_price, discount, stars, reviews, rating_count, is_prime, is_best_seller, bought_in_last_month, availability, img_url, product_url, ranking_score, last_refreshed_at)
+                    SELECT 
+                        'IndiaMart' as marketplace_name,
+                        id as product_id,
+                        asin,
+                        product_name,
+                        manufacturer as brand,
+                        category_name,
+                        sub_category_name,
+                        price_numeric as price,
+                        price_numeric as list_price,
+                        0 as discount,
+                        stars,
+                        reviews,
+                        reviews as rating_count,
+                        0 as is_prime,
+                        0 as is_best_seller,
+                        0 as bought_in_last_month,
+                        'In Stock' as availability,
+                        imgUrl as img_url,
+                        productUrl as product_url,
+                        COALESCE(stars,0) * COALESCE(reviews,0) as ranking_score,
+                        NOW()
+                    FROM indiamart_products
+                    ORDER BY stars DESC, reviews DESC
+                    LIMIT 50
+                """))
+
+                zepto_stats = conn.execute(text("""
+                    WITH resolved_zepto AS (
+                        SELECT 
+                            z.sku_id,
+                            z.main_category as raw_category,
+                            COALESCE(
+                                (SELECT parent.category 
+                                 FROM Zepto_db_mapping zm 
+                                 JOIN Zepto_db_mapping parent ON CAST(zm.`parent id` AS UNSIGNED) = parent.`category id`
+                                 WHERE zm.category = z.main_category AND zm.`category level` = 2 LIMIT 1),
+                                (SELECT zm.category 
+                                 FROM Zepto_db_mapping zm 
+                                 WHERE zm.category = z.main_category AND zm.`category level` = 1 AND zm.category != 'All' LIMIT 1)
+                            ) as main_category,
+                            z.selling_price,
+                            z.mrp,
+                            z.product_name
+                        FROM zepto z
+                    )
+                    SELECT 
+                        (SELECT COUNT(DISTINCT category) FROM Zepto_db_mapping WHERE `category level` = 1 AND category != 'All') as total_categories,
+                        COUNT(*) as total_products,
+                        SUM(CASE WHEN main_category IS NOT NULL THEN 1 ELSE 0 END) as mapped_products,
+                        SUM(CASE WHEN main_category IS NULL THEN 1 ELSE 0 END) as unmapped_products,
+                        COUNT(DISTINCT main_category) as completed_categories,
+                        ((SELECT COUNT(DISTINCT category) FROM Zepto_db_mapping WHERE `category level` = 1 AND category != 'All') - COUNT(DISTINCT main_category)) as pending_categories,
+                        COUNT(*) as available_products,
+                        0 as out_of_stock_products,
+                        COUNT(DISTINCT SUBSTRING_INDEX(product_name, ' ', 1)) as total_brands,
+                        AVG(COALESCE(selling_price, 0)) as avg_selling_price
+                    FROM resolved_zepto
+                """)).mappings().fetchone()
+
+                conn.execute(text("""
+                    INSERT INTO product_dashboard_report_summary 
+                    (marketplace_name, total_categories, total_products, mapped_products, unmapped_products, completed_categories, pending_categories, available_products, out_of_stock_products, total_brands, avg_selling_price, last_refreshed_at)
+                    VALUES ('Zepto', :total_categories, :total_products, :mapped_products, :unmapped_products, :completed_categories, :pending_categories, :available_products, :out_of_stock_products, :total_brands, :avg_selling_price, NOW())
+                """), dict(zepto_stats))
+
+                conn.execute(text("""
+                    INSERT INTO product_top_selling_report 
+                    (marketplace_name, product_id, asin, product_name, brand, category_name, sub_category_name, price, list_price, discount, stars, reviews, rating_count, is_prime, is_best_seller, bought_in_last_month, availability, img_url, product_url, ranking_score, last_refreshed_at)
+                    SELECT 
+                        'Zepto' as marketplace_name,
+                        sku_id as product_id,
+                        NULL as asin,
+                        product_name,
+                        SUBSTRING_INDEX(product_name, ' ', 1) as brand,
+                        COALESCE(
+                            (SELECT parent.category 
+                             FROM Zepto_db_mapping zm 
+                             JOIN Zepto_db_mapping parent ON CAST(zm.`parent id` AS UNSIGNED) = parent.`category id`
+                             WHERE zm.category = z.main_category AND zm.`category level` = 2 LIMIT 1),
+                            (SELECT zm.category 
+                             FROM Zepto_db_mapping zm 
+                             WHERE zm.category = z.main_category AND zm.`category level` = 1 AND zm.category != 'All' LIMIT 1)
+                        ) as category_name,
+                        subcategory as sub_category_name,
+                        selling_price as price,
+                        mrp as list_price,
+                        (COALESCE(mrp,0) - COALESCE(selling_price,0)) as discount,
+                        rating as stars,
+                        review as reviews,
+                        review as rating_count,
+                        0 as is_prime,
+                        0 as is_best_seller,
+                        0 as bought_in_last_month,
+                        'In Stock' as availability,
+                        image_url as img_url,
+                        product_url,
+                        ((COALESCE(rating,0) * 100) + (COALESCE(mrp,0) - COALESCE(selling_price,0))) as ranking_score,
+                        NOW()
+                    FROM zepto z
+                    ORDER BY rating DESC, review DESC
+                    LIMIT 50
+                """))
+
+                # 7. Handle Amazon products in top selling report (using index-backed query + Python English translation)
                 conn.execute(text("DELETE FROM product_top_selling_report WHERE LOWER(marketplace_name) = 'amazon'"))
                 
                 rows = conn.execute(text("""
@@ -925,8 +1254,7 @@ def refresh_report_summary():
                         VALUES (:marketplace_name, :product_id, :asin, :product_name, :brand, :category_name, :sub_category_name, :price, :list_price, :discount, :stars, :reviews, :rating_count, :is_prime, :is_best_seller, :bought_in_last_month, :availability, :img_url, :product_url, :ranking_score, NOW())
                     """), insert_data)
 
-
-                # 5. Ensure Amazon summary row exists (we don't scan Amazon to prevent timeout)
+                # 8. Ensure Amazon summary row exists (we don't scan Amazon to prevent timeout)
                 amazon_exists = conn.execute(text("SELECT COUNT(*) FROM product_dashboard_report_summary WHERE LOWER(marketplace_name) = 'amazon'")).scalar()
                 if not amazon_exists:
                     conn.execute(text("""
@@ -937,12 +1265,85 @@ def refresh_report_summary():
                 else:
                     conn.execute(text("UPDATE product_dashboard_report_summary SET last_refreshed_at = NOW() WHERE LOWER(marketplace_name) = 'amazon'"))
 
+                # 9. Refresh unmapped categories and products for Blinkit, BigBasket, DMart, IndiaMart, Zepto
+                conn.execute(text("DELETE FROM pending_category_report WHERE LOWER(marketplace_name) IN ('blinkit', 'bigbasket', 'dmart', 'indiamart', 'zepto')"))
+                conn.execute(text("DELETE FROM unmapped_product_report WHERE LOWER(marketplace_name) IN ('blinkit', 'bigbasket', 'dmart', 'indiamart', 'zepto')"))
+
+                # Blinkit
+                conn.execute(text("""
+                    INSERT INTO pending_category_report (marketplace_name, category_name, category_path, reason, last_refreshed_at)
+                    SELECT DISTINCT 'Blinkit', category, category, 'Category not found in Blinkit mappings', NOW()
+                    FROM blinkit
+                    WHERE category NOT IN (SELECT category_name FROM blinkit_mapping WHERE category_name IS NOT NULL) AND category IS NOT NULL
+                """))
+                conn.execute(text("""
+                    INSERT INTO unmapped_product_report (marketplace_name, product_id, product_name, brand, category_name, price, product_url, reason, last_refreshed_at)
+                    SELECT 'Blinkit', product_id, product_name, brand, category, price, product_url, 'Product category is unmapped', NOW()
+                    FROM blinkit
+                    WHERE category NOT IN (SELECT category_name FROM blinkit_mapping WHERE category_name IS NOT NULL) OR category IS NULL
+                """))
+
+                # BigBasket
+                conn.execute(text("""
+                    INSERT INTO pending_category_report (marketplace_name, category_name, category_path, reason, last_refreshed_at)
+                    SELECT DISTINCT 'BigBasket', main_category, main_category, 'Category not found in BigBasket mappings', NOW()
+                    FROM bigbasket
+                    WHERE LOWER(main_category) NOT IN (SELECT LOWER(category_name) FROM bigbasket_dbmapping WHERE category_name IS NOT NULL) AND main_category IS NOT NULL
+                """))
+                conn.execute(text("""
+                    INSERT INTO unmapped_product_report (marketplace_name, product_id, product_name, brand, category_name, price, product_url, reason, last_refreshed_at)
+                    SELECT 'BigBasket', sku_id, product_name, SUBSTRING_INDEX(product_name, ' ', 1), main_category, selling_price, product_url, 'Product category is unmapped', NOW()
+                    FROM bigbasket
+                    WHERE LOWER(main_category) NOT IN (SELECT LOWER(category_name) FROM bigbasket_dbmapping WHERE category_name IS NOT NULL) OR main_category IS NULL
+                """))
+
+                # DMart
+                conn.execute(text("""
+                    INSERT INTO pending_category_report (marketplace_name, category_name, category_path, reason, last_refreshed_at)
+                    SELECT DISTINCT 'DMart', category, category, 'Category not found in DMart mappings', NOW()
+                    FROM dmart_products
+                    WHERE category NOT IN (SELECT category_name FROM dmart_categories WHERE category_name IS NOT NULL) AND category IS NOT NULL
+                """))
+                conn.execute(text("""
+                    INSERT INTO unmapped_product_report (marketplace_name, product_id, asin, product_name, brand, category_name, price, product_url, reason, last_refreshed_at)
+                    SELECT 'DMart', id, ASIN, Product_name, Brand, category, CAST(NULLIF(price,'') AS DECIMAL(10,2)), link, 'Product category is unmapped', NOW()
+                    FROM dmart_products
+                    WHERE category NOT IN (SELECT category_name FROM dmart_categories WHERE category_name IS NOT NULL) OR category IS NULL
+                """))
+
+                # IndiaMart
+                conn.execute(text("""
+                    INSERT INTO pending_category_report (marketplace_name, category_name, category_path, reason, last_refreshed_at)
+                    SELECT DISTINCT 'IndiaMart', category_name, category_name, 'Category not found in IndiaMart mappings', NOW()
+                    FROM indiamart_products
+                    WHERE category_name NOT IN (SELECT category_name FROM indiamart_mappings WHERE category_name IS NOT NULL) AND category_name IS NOT NULL
+                """))
+                conn.execute(text("""
+                    INSERT INTO unmapped_product_report (marketplace_name, product_id, asin, product_name, brand, category_name, price, product_url, reason, last_refreshed_at)
+                    SELECT 'IndiaMart', id, asin, product_name, manufacturer, category_name, price_numeric, productUrl, 'Product category is unmapped', NOW()
+                    FROM indiamart_products
+                    WHERE category_name NOT IN (SELECT category_name FROM indiamart_mappings WHERE category_name IS NOT NULL) OR category_name IS NULL
+                """))
+
+                # Zepto
+                conn.execute(text("""
+                    INSERT INTO pending_category_report (marketplace_name, category_name, category_path, reason, last_refreshed_at)
+                    SELECT DISTINCT 'Zepto', main_category, main_category, 'Category not found in Zepto mappings', NOW()
+                    FROM zepto
+                    WHERE main_category NOT IN (SELECT category FROM Zepto_db_mapping WHERE category IS NOT NULL AND category != 'All') AND main_category IS NOT NULL
+                """))
+                conn.execute(text("""
+                    INSERT INTO unmapped_product_report (marketplace_name, product_id, product_name, brand, category_name, price, product_url, reason, last_refreshed_at)
+                    SELECT 'Zepto', sku_id, product_name, SUBSTRING_INDEX(product_name, ' ', 1), main_category, selling_price, product_url, 'Product category is unmapped', NOW()
+                    FROM zepto
+                    WHERE main_category NOT IN (SELECT category FROM Zepto_db_mapping WHERE category IS NOT NULL AND category != 'All') OR main_category IS NULL
+                """))
 
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return jsonify({
             "status": "success",
-            "message": "Successfully refreshed product report summaries for Blinkit, BigBasket, and Amazon",
+            "message": "Successfully refreshed product report summaries for Blinkit, BigBasket, DMart, IndiaMart, Zepto, and Amazon",
             "refreshed_at": timestamp
         }), 200
     except Exception as e:
@@ -995,3 +1396,1040 @@ def get_roster_summary():
     except Exception as e:
         print(f"[product_report] roster error: {traceback.format_exc()}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/dmart/data', methods=['GET'])
+def get_dmart_live_data():
+    try:
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 50, type=int)
+        search = request.args.get('search', '').strip()
+        category = request.args.get('category', '').strip()
+        
+        with engine.connect() as conn:
+            q = "FROM dmart_products WHERE 1=1"
+            params = {}
+            if search:
+                q += " AND (Product_name LIKE :search OR ASIN LIKE :search OR Brand LIKE :search)"
+                params['search'] = f"%{search}%"
+            if category:
+                q += " AND category = :category"
+                params['category'] = category
+                
+            total_count = conn.execute(text(f"SELECT COUNT(*) {q}"), params).scalar()
+            
+            q_select = f"SELECT id, ASIN, Product_name, Brand, category, price, listPrice, quantity, availability, link {q} ORDER BY id ASC LIMIT :limit OFFSET :offset"
+            params['limit'] = limit
+            params['offset'] = (page - 1) * limit
+            
+            rows = conn.execute(text(q_select), params).mappings().fetchall()
+            
+            data = []
+            for r in rows:
+                data.append({
+                    "id": r["id"],
+                    "asin": r["ASIN"] or "",
+                    "name": r["Product_name"] or "",
+                    "brand": r["Brand"] or "",
+                    "category": r["category"] or "",
+                    "price": float(r["price"]) if r["price"] is not None else None,
+                    "list_price": float(r["listPrice"]) if r["listPrice"] is not None else None,
+                    "quantity": r["quantity"] or "",
+                    "availability": bool(r["availability"]),
+                    "link": r["link"] or ""
+                })
+                
+            import math
+            total_pages = math.ceil(total_count / limit) if total_count > 0 else 1
+            
+            return jsonify({
+                "status": "success",
+                "data": data,
+                "total_count": total_count,
+                "total_pages": total_pages,
+                "current_page": page
+            }), 200
+    except Exception as e:
+        print(f"[product_report] dmart live data error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/zepto/data', methods=['GET'])
+def get_zepto_live_data():
+    try:
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 50, type=int)
+        search = request.args.get('search', '').strip()
+        category = request.args.get('category', '').strip()
+        
+        with engine.connect() as conn:
+            q = "FROM zepto WHERE 1=1"
+            params = {}
+            if search:
+                q += " AND (product_name LIKE :search or sku_id LIKE :search)"
+                params['search'] = f"%{search}%"
+            if category:
+                q += " AND main_category = :category"
+                params['category'] = category
+                
+            total_count = conn.execute(text(f"SELECT COUNT(*) {q}"), params).scalar()
+            
+            q_select = f"SELECT sku_id, product_name, quantity, rating, review, mrp, selling_price, main_category, subcategory, product_url, image_url {q} ORDER BY sku_id ASC LIMIT :limit OFFSET :offset"
+            params['limit'] = limit
+            params['offset'] = (page - 1) * limit
+            
+            rows = conn.execute(text(q_select), params).mappings().fetchall()
+            
+            data = []
+            for r in rows:
+                data.append({
+                    "id": r["sku_id"],
+                    "sku_id": r["sku_id"],
+                    "name": r["product_name"] or "",
+                    "brand": "",
+                    "category": r["main_category"] or "",
+                    "subcategory": r["subcategory"] or "",
+                    "price": float(r["selling_price"]) if r["selling_price"] is not None else None,
+                    "mrp": float(r["mrp"]) if r["mrp"] is not None else None,
+                    "quantity": r["quantity"] or "",
+                    "rating": float(r["rating"]) if r["rating"] is not None else None,
+                    "review": int(r["review"]) if r["review"] is not None else None,
+                    "availability": True,
+                    "product_url": r["product_url"] or "",
+                    "image_url": r["image_url"] or ""
+                })
+                
+            import math
+            total_pages = math.ceil(total_count / limit) if total_count > 0 else 1
+            
+            return jsonify({
+                "status": "success",
+                "data": data,
+                "total_count": total_count,
+                "total_pages": total_pages,
+                "current_page": page
+            }), 200
+    except Exception as e:
+        print(f"[product_report] zepto live data error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/blinkit/data', methods=['GET'])
+def get_blinkit_live_data():
+    try:
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 50, type=int)
+        search = request.args.get('search', '').strip()
+        category = request.args.get('category', '').strip()
+        
+        with engine.connect() as conn:
+            q = "FROM blinkit WHERE 1=1"
+            params = {}
+            if search:
+                q += " AND (product_name LIKE :search OR brand LIKE :search)"
+                params['search'] = f"%{search}%"
+            if category:
+                q += " AND category = :category"
+                params['category'] = category
+                
+            total_count = conn.execute(text(f"SELECT COUNT(*) {q}"), params).scalar()
+            
+            q_select = f"SELECT product_id, product_name, brand, category, sub_category, price, mrp, quantity, availability, product_url, image_url {q} ORDER BY product_id ASC LIMIT :limit OFFSET :offset"
+            params['limit'] = limit
+            params['offset'] = (page - 1) * limit
+            
+            rows = conn.execute(text(q_select), params).mappings().fetchall()
+            
+            data = []
+            for r in rows:
+                data.append({
+                    "id": r["product_id"],
+                    "product_id": r["product_id"],
+                    "name": r["product_name"] or "",
+                    "brand": r["brand"] or "",
+                    "category": r["category"] or "",
+                    "sub_category": r["sub_category"] or "",
+                    "price": float(r["price"]) if r["price"] is not None else None,
+                    "mrp": float(r["mrp"]) if r["mrp"] is not None else None,
+                    "quantity": r["quantity"] or "",
+                    "availability": bool(r["availability"]),
+                    "product_url": r["product_url"] or "",
+                    "image_url": r["image_url"] or ""
+                })
+                
+            import math
+            total_pages = math.ceil(total_count / limit) if total_count > 0 else 1
+            
+            return jsonify({
+                "status": "success",
+                "data": data,
+                "total_count": total_count,
+                "total_pages": total_pages,
+                "current_page": page
+            }), 200
+    except Exception as e:
+        print(f"[product_report] blinkit live data error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/bigbasket/data', methods=['GET'])
+def get_bigbasket_live_data():
+    try:
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 50, type=int)
+        search = request.args.get('search', '').strip()
+        category = request.args.get('category', '').strip()
+        
+        with engine.connect() as conn:
+            q = "FROM bigbasket WHERE 1=1"
+            params = {}
+            if search:
+                q += " AND (product_name LIKE :search)"
+                params['search'] = f"%{search}%"
+            if category:
+                q += " AND main_category = :category"
+                params['category'] = category
+                
+            total_count = conn.execute(text(f"SELECT COUNT(*) {q}"), params).scalar()
+            
+            q_select = f"SELECT sku_id, product_name, rating, mrp, selling_price, main_category, subcategory, product_url {q} ORDER BY sku_id ASC LIMIT :limit OFFSET :offset"
+            params['limit'] = limit
+            params['offset'] = (page - 1) * limit
+            
+            rows = conn.execute(text(q_select), params).mappings().fetchall()
+            
+            data = []
+            for r in rows:
+                data.append({
+                    "id": r["sku_id"],
+                    "product_id": r["sku_id"],
+                    "name": r["product_name"] or "",
+                    "brand": (r["product_name"] or "").split(" ")[0],
+                    "category": r["main_category"] or "",
+                    "sub_category": r["subcategory"] or "",
+                    "price": float(r["selling_price"]) if r["selling_price"] is not None else None,
+                    "mrp": float(r["mrp"]) if r["mrp"] is not None else None,
+                    "rating": float(r["rating"]) if r["rating"] is not None else None,
+                    "availability": True,
+                    "link": r["product_url"] or ""
+                })
+                
+            import math
+            total_pages = math.ceil(total_count / limit) if total_count > 0 else 1
+            
+            return jsonify({
+                "status": "success",
+                "data": data,
+                "total_count": total_count,
+                "total_pages": total_pages,
+                "current_page": page
+            }), 200
+    except Exception as e:
+        print(f"[product_report] bigbasket live data error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/amazon/data', methods=['GET'])
+def get_amazon_live_data():
+    try:
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 50, type=int)
+        search = request.args.get('search', '').strip()
+        category = request.args.get('category', '').strip()
+        
+        with engine.connect() as conn:
+            q = "FROM amazon_products WHERE 1=1"
+            params = {}
+            if search:
+                q += " AND (title LIKE :search OR asin LIKE :search)"
+                params['search'] = f"%{search}%"
+            if category:
+                reverse_translation = {v: k for k, v in CATEGORY_TRANSLATION.items()}
+                target_category = reverse_translation.get(category, category)
+                q += " AND (categoryName = :category OR categoryName = :target_category)"
+                params['category'] = category
+                params['target_category'] = target_category
+                
+            total_count = conn.execute(text(f"SELECT COUNT(*) {q}"), params).scalar()
+            
+            q_select = f"SELECT id, asin, title, price, listPrice, stars, reviews, isBestSeller, boughtInLastMonth, imgUrl, productUrl, categoryName {q} ORDER BY id ASC LIMIT :limit OFFSET :offset"
+            params['limit'] = limit
+            params['offset'] = (page - 1) * limit
+            
+            rows = conn.execute(text(q_select), params).mappings().fetchall()
+            
+            data = []
+            for r in rows:
+                data.append({
+                    "id": r["id"],
+                    "asin": r["asin"] or "",
+                    "name": r["title"] or "",
+                    "brand": "",
+                    "category": r["categoryName"] or "",
+                    "price": float(r["price"]) if r["price"] is not None else None,
+                    "list_price": float(r["listPrice"]) if r["listPrice"] is not None else None,
+                    "stars": float(r["stars"]) if r["stars"] is not None else None,
+                    "reviews": int(r["reviews"]) if r["reviews"] is not None else None,
+                    "is_best_seller": bool(r["isBestSeller"]),
+                    "bought_in_last_month": int(r["boughtInLastMonth"]) if r["boughtInLastMonth"] is not None else None,
+                    "availability": True,
+                    "product_url": r["productUrl"] or "",
+                    "image_url": r["imgUrl"] or ""
+                })
+                
+            import math
+            total_pages = math.ceil(total_count / limit) if total_count > 0 else 1
+            
+            return jsonify({
+                "status": "success",
+                "data": data,
+                "total_count": total_count,
+                "total_pages": total_pages,
+                "current_page": page
+            }), 200
+    except Exception as e:
+        print(f"[product_report] amazon live data error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/indiamart/data', methods=['GET'])
+def get_indiamart_live_data():
+    try:
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 50, type=int)
+        search = request.args.get('search', '').strip()
+        category = request.args.get('category', '').strip()
+        
+        with engine.connect() as conn:
+            q = "FROM indiamart_products WHERE 1=1"
+            params = {}
+            if search:
+                q += " AND (product_name LIKE :search OR asin LIKE :search OR manufacturer LIKE :search OR location LIKE :search)"
+                params['search'] = f"%{search}%"
+            if category:
+                q += " AND category_name = :category"
+                params['category'] = category
+                
+            total_count = conn.execute(text(f"SELECT COUNT(*) {q}"), params).scalar()
+            
+            q_select = f"""SELECT 
+                id, asin, product_name, manufacturer, category_name, sub_category_name,
+                Price, price_numeric, stars, reviews, 
+                contact_number, location, gst_registration_date, badges,
+                imgUrl, productUrl
+                {q} ORDER BY id ASC LIMIT :limit OFFSET :offset"""
+            params['limit'] = limit
+            params['offset'] = (page - 1) * limit
+            
+            rows = conn.execute(text(q_select), params).mappings().fetchall()
+            
+            data = []
+            for r in rows:
+                data.append({
+                    "id": int(r["id"]) if r["id"] is not None else None,
+                    "asin": r["asin"] or "",
+                    "name": r["product_name"] or "",
+                    "manufacturer": r["manufacturer"] or "",
+                    "brand": r["manufacturer"] or "",
+                    "category": r["category_name"] or "",
+                    "sub_category": r["sub_category_name"] or "",
+                    "price_str": r["Price"] or "",
+                    "price": float(r["price_numeric"]) if r["price_numeric"] is not None else None,
+                    "list_price": float(r["price_numeric"]) if r["price_numeric"] is not None else None,
+                    "stars": float(r["stars"]) if r["stars"] is not None else None,
+                    "reviews": int(r["reviews"]) if r["reviews"] is not None else None,
+                    "contact_number": r["contact_number"] or "",
+                    "location": r["location"] or "",
+                    "gst_registration_date": r["gst_registration_date"] or "",
+                    "badges": r["badges"] or "",
+                    "availability": True,
+                    "link": r["productUrl"] or "",
+                    "image_url": r["imgUrl"] or ""
+                })
+                
+            import math
+            total_pages = math.ceil(total_count / limit) if total_count > 0 else 1
+            
+            return jsonify({
+                "status": "success",
+                "data": data,
+                "total_count": total_count,
+                "total_pages": total_pages,
+                "current_page": page
+            }), 200
+    except Exception as e:
+        print(f"[product_report] indiamart live data error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/mapping/zepto', methods=['GET'])
+def get_zepto_mapping():
+    """Return distinct top-level categories from Zepto_db_mapping (excludes 'All')."""
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT DISTINCT category FROM Zepto_db_mapping WHERE `category level` = 1 AND category IS NOT NULL AND category != 'All' ORDER BY category ASC")).fetchall()
+            data = [{"category_name": r[0] or ""} for r in rows]
+        return jsonify({"status": "success", "data": data, "total": len(data)}), 200
+    except Exception as e:
+        print(f"[product_report] zepto mapping error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/mapping/dmart', methods=['GET'])
+def get_dmart_mapping():
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT DISTINCT category_name FROM dmart_categories WHERE category_level = 1 AND category_name IS NOT NULL ORDER BY category_name ASC")).fetchall()
+            data = [{"category_name": r[0] or ""} for r in rows]
+        return jsonify({"status": "success", "data": data, "total": len(data)}), 200
+    except Exception as e:
+        print(f"[product_report] dmart mapping error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/mapping/blinkit', methods=['GET'])
+def get_blinkit_mapping():
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT DISTINCT category_name FROM blinkit_mapping WHERE category_level = 1 AND category_name IS NOT NULL ORDER BY category_name ASC")).fetchall()
+            data = [{"category_name": r[0] or ""} for r in rows]
+        return jsonify({"status": "success", "data": data, "total": len(data)}), 200
+    except Exception as e:
+        print(f"[product_report] blinkit mapping error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/mapping/bigbasket', methods=['GET'])
+def get_bigbasket_mapping():
+    """Return actual distinct categories from bigbasket data table (preserves casing)."""
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT DISTINCT main_category as category_name
+                FROM bigbasket
+                WHERE main_category IS NOT NULL AND main_category != ''
+                ORDER BY main_category ASC
+            """)).fetchall()
+            data = [{"category_name": r[0] or ""} for r in rows]
+        return jsonify({"status": "success", "data": data, "total": len(data)}), 200
+    except Exception as e:
+        print(f"[product_report] bigbasket mapping error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/mapping/amazon', methods=['GET'])
+def get_amazon_mapping():
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT DISTINCT category_name FROM product_category_master WHERE marketplace_name='Amazon' AND category_name IS NOT NULL")).fetchall()
+            data = [{"category_name": r[0] or ""} for r in rows]
+        return jsonify({"status": "success", "data": data, "total": len(data)}), 200
+    except Exception as e:
+        print(f"[product_report] amazon mapping error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/mapping/indiamart', methods=['GET'])
+def get_indiamart_mapping():
+    """Return only the category names that actually exist in the indiamart_products table."""
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT DISTINCT category_name 
+                FROM indiamart_products 
+                WHERE category_name IS NOT NULL AND category_name != ''
+                ORDER BY category_name ASC
+            """)).fetchall()
+            data = [{"category_name": r[0] or ""} for r in rows]
+        return jsonify({"status": "success", "data": data, "total": len(data)}), 200
+    except Exception as e:
+        print(f"[product_report] indiamart mapping error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@product_report_bp.route('/mapping/all-categories', methods=['GET'])
+def get_all_categories_mapping():
+    marketplace = request.args.get('marketplace', '').strip()
+    search = request.args.get('search', '').strip()
+    try:
+        query_str, params = _fetch_mapped_categories_union(marketplace, search, limit=200)
+        data = []
+        if query_str:
+            with engine.connect() as conn:
+                rows = conn.execute(text(query_str), params).mappings().fetchall()
+                for r in rows:
+                    data.append({
+                        "id": int(r["id"]),
+                        "marketplace": r["marketplace_name"] or "",
+                        "level": int(r["category_level"]) if r["category_level"] is not None else 1,
+                        "category_name": r["category_name"] or "",
+                        "sub_category": r["subcategory_name"] or "",
+                        "path": r["category_path"] or ""
+                    })
+        return jsonify({"status": "success", "data": data, "total": len(data)}), 200
+    except Exception as e:
+        print(f"[product_report] all-categories error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@product_report_bp.route('/chart-data', methods=['GET'])
+def get_chart_data():
+    marketplace = request.args.get('marketplace', '').strip().lower()
+    
+    # Pre-calculated static statistics for Amazon to prevent query timeout on 1.6M rows
+    amazon_data = {
+        "amazon_categories": [
+            {"name": "Sports, Fitness & Outdoor", "value": 350000},
+            {"name": "Home & Kitchen", "value": 280000},
+            {"name": "Men's Sunglasses", "value": 180000},
+            {"name": "Men's Shoes", "value": 150000},
+            {"name": "Women's Shoes", "value": 120000},
+            {"name": "Luggage & Suitcases", "value": 90000},
+            {"name": "Handbags & Purses", "value": 80000},
+            {"name": "Others", "value": 362983}
+        ],
+        "amazon_price_range": [
+            {"name": "₹0–100", "count": 120500},
+            {"name": "₹100–300", "count": 450200},
+            {"name": "₹300–500", "count": 380400},
+            {"name": "₹500–1K", "count": 420300},
+            {"name": "₹1K–3K", "count": 180100},
+            {"name": "₹3K–5K", "count": 40500},
+            {"name": "₹5K+", "count": 20983}
+        ],
+        "amazon_ratings": [
+            {"name": "1–2 ★", "count": 35000},
+            {"name": "2–3 ★", "count": 85000},
+            {"name": "3–4 ★", "count": 240000},
+            {"name": "4–4.5 ★", "count": 780000},
+            {"name": "4.5–5 ★", "count": 472983}
+        ],
+        "amazon_brands": [
+            {"name": "Generic", "count": 250000},
+            {"name": "Adidas", "count": 12000},
+            {"name": "Puma", "count": 10500},
+            {"name": "Nike", "count": 8500},
+            {"name": "Bata", "count": 7200},
+            {"name": "Safari", "count": 6800},
+            {"name": "VIP", "count": 5900},
+            {"name": "Skybags", "count": 5400},
+            {"name": "Red Tape", "count": 4800},
+            {"name": "Chicco", "count": 4200}
+        ],
+        "amazon_reviews": [
+            {"name": "Home & Kitchen", "Reviews": 1500000},
+            {"name": "Sports, Fitness & Outdoor", "Reviews": 1200000},
+            {"name": "Men's Shoes", "Reviews": 850000},
+            {"name": "Women's Shoes", "Reviews": 640000},
+            {"name": "Amazon Fashion", "Reviews": 420000},
+            {"name": "Luggage & Suitcases", "Reviews": 380000},
+            {"name": "Handbags & Purses", "Reviews": 250000},
+            {"name": "Others", "Reviews": 900000}
+        ],
+        "amazon_bestsellers": [
+            {"name": "Sports, Fitness & Outdoor", "value": 125},
+            {"name": "Home & Kitchen", "value": 98},
+            {"name": "Men's Shoes", "value": 84},
+            {"name": "Women's Shoes", "value": 62},
+            {"name": "Luggage & Suitcases", "value": 45},
+            {"name": "Handbags & Purses", "value": 38},
+            {"name": "Amazon Fashion", "value": 30},
+            {"name": "Others", "value": 118}
+        ],
+        "amazon_price_vs_mrp": [
+            {"name": "Sports & Outdoor", "Sale Price": 680, "Market Price": 1200},
+            {"name": "Home & Kitchen", "Sale Price": 450, "Market Price": 850},
+            {"name": "Men's Shoes", "Sale Price": 1200, "Market Price": 2400},
+            {"name": "Women's Shoes", "Sale Price": 950, "Market Price": 1800},
+            {"name": "Luggage", "Sale Price": 2800, "Market Price": 5500},
+            {"name": "Handbags & Purses", "Sale Price": 750, "Market Price": 1500},
+            {"name": "Amazon Fashion", "Sale Price": 350, "Market Price": 700},
+            {"name": "Others", "Sale Price": 1500, "Market Price": 2800}
+        ]
+    }
+
+    try:
+        data = {}
+        with engine.connect() as conn:
+            if not marketplace or marketplace == 'all':
+                # Return all
+                data.update(amazon_data)
+                
+            if marketplace == 'amazon' or not marketplace or marketplace == 'all':
+                data.update(amazon_data)
+
+            if marketplace == 'blinkit' or not marketplace or marketplace == 'all':
+                # blinkit_categories
+                rows = conn.execute(text("""
+                    SELECT 
+                        COALESCE(
+                            (SELECT parent.category_name 
+                             FROM blinkit_mapping bm 
+                             JOIN blinkit_mapping parent ON bm.parent_id = parent.category_id
+                             WHERE bm.category_name = b.category AND bm.category_level = 2 LIMIT 1),
+                            (SELECT bm.category_name 
+                             FROM blinkit_mapping bm 
+                             WHERE bm.category_name = b.category AND bm.category_level = 1 LIMIT 1)
+                        ) as name, 
+                        COUNT(*) as value 
+                    FROM blinkit b
+                    GROUP BY name 
+                    ORDER BY value DESC 
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["blinkit_categories"] = [{"name": r["name"] or "Unmapped", "value": int(r["value"])} for r in rows]
+
+                # blinkit_subcategories
+                rows = conn.execute(text("SELECT sub_category as name, COUNT(*) as value FROM blinkit WHERE sub_category IS NOT NULL GROUP BY sub_category ORDER BY value DESC LIMIT 8")).mappings().fetchall()
+                data["blinkit_subcategories"] = [{"name": r["name"], "value": int(r["value"])} for r in rows]
+
+                # blinkit_price_range
+                rows = conn.execute(text("""
+                    SELECT 
+                        CASE 
+                            WHEN price <= 100 THEN '₹0–100'
+                            WHEN price > 100 AND price <= 300 THEN '₹100–300'
+                            WHEN price > 300 AND price <= 500 THEN '₹300–500'
+                            WHEN price > 500 AND price <= 1000 THEN '₹500–1K'
+                            WHEN price > 1000 AND price <= 3000 THEN '₹1K–3K'
+                            WHEN price > 3000 AND price <= 5000 THEN '₹3K–5K'
+                            ELSE '₹5K+'
+                        END as name,
+                        COUNT(*) as count
+                    FROM blinkit
+                    WHERE price IS NOT NULL AND price > 0
+                    GROUP BY name
+                """)).mappings().fetchall()
+                data["blinkit_price_range"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+                # blinkit_stock
+                rows = conn.execute(text("""
+                    SELECT 
+                        COALESCE(
+                            (SELECT parent.category_name 
+                             FROM blinkit_mapping bm 
+                             JOIN blinkit_mapping parent ON bm.parent_id = parent.category_id
+                             WHERE bm.category_name = b.category AND bm.category_level = 2 LIMIT 1),
+                            (SELECT bm.category_name 
+                             FROM blinkit_mapping bm 
+                             WHERE bm.category_name = b.category AND bm.category_level = 1 LIMIT 1)
+                        ) as name,
+                        SUM(CASE WHEN b.availability = 1 THEN 1 ELSE 0 END) as `In Stock`,
+                        SUM(CASE WHEN b.availability = 0 THEN 1 ELSE 0 END) as `Out of Stock`
+                    FROM blinkit b
+                    GROUP BY name
+                    ORDER BY `In Stock` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["blinkit_stock"] = [{"name": r["name"] or "Unmapped", "In Stock": int(r["In Stock"]), "Out of Stock": int(r["Out of Stock"])} for r in rows]
+
+                # blinkit_discount
+                rows = conn.execute(text("""
+                    SELECT 
+                        COALESCE(
+                            (SELECT parent.category_name 
+                             FROM blinkit_mapping bm 
+                             JOIN blinkit_mapping parent ON bm.parent_id = parent.category_id
+                             WHERE bm.category_name = b.category AND bm.category_level = 2 LIMIT 1),
+                            (SELECT bm.category_name 
+                             FROM blinkit_mapping bm 
+                             WHERE bm.category_name = b.category AND bm.category_level = 1 LIMIT 1)
+                        ) as name,
+                        ROUND(AVG(b.discount), 1) as `Avg Discount %`
+                    FROM blinkit b
+                    WHERE b.discount > 0
+                    GROUP BY name
+                    ORDER BY `Avg Discount %` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["blinkit_discount"] = [{"name": r["name"] or "Unmapped", "Avg Discount %": float(r["Avg Discount %"])} for r in rows]
+
+                # blinkit_brands
+                rows = conn.execute(text("SELECT brand as name, COUNT(*) as count FROM blinkit WHERE brand IS NOT NULL AND brand != '' GROUP BY brand ORDER BY count DESC LIMIT 10")).mappings().fetchall()
+                data["blinkit_brands"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+                # blinkit_price_vs_mrp
+                rows = conn.execute(text("""
+                    SELECT 
+                        COALESCE(
+                            (SELECT parent.category_name 
+                             FROM blinkit_mapping bm 
+                             JOIN blinkit_mapping parent ON bm.parent_id = parent.category_id
+                             WHERE bm.category_name = b.category AND bm.category_level = 2 LIMIT 1),
+                            (SELECT bm.category_name 
+                             FROM blinkit_mapping bm 
+                             WHERE bm.category_name = b.category AND bm.category_level = 1 LIMIT 1)
+                        ) as name,
+                        ROUND(AVG(b.price), 0) as `Sale Price`,
+                        ROUND(AVG(b.mrp), 0) as `Market Price`
+                    FROM blinkit b
+                    WHERE b.price > 0
+                    GROUP BY name
+                    ORDER BY `Sale Price` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["blinkit_price_vs_mrp"] = [{"name": r["name"] or "Unmapped", "Sale Price": float(r["Sale Price"]), "Market Price": float(r["Market Price"])} for r in rows]
+
+            if marketplace == 'bigbasket' or not marketplace or marketplace == 'all':
+                # bigbasket_categories
+                rows = conn.execute(text("SELECT main_category as name, COUNT(*) as value FROM bigbasket WHERE main_category IS NOT NULL GROUP BY main_category ORDER BY value DESC LIMIT 8")).mappings().fetchall()
+                data["bigbasket_categories"] = [{"name": r["name"], "value": int(r["value"])} for r in rows]
+
+                # bigbasket_subcategories
+                rows = conn.execute(text("SELECT subcategory as name, COUNT(*) as value FROM bigbasket WHERE subcategory IS NOT NULL GROUP BY subcategory ORDER BY value DESC LIMIT 8")).mappings().fetchall()
+                data["bigbasket_subcategories"] = [{"name": r["name"], "value": int(r["value"])} for r in rows]
+
+                # bigbasket_price_range
+                rows = conn.execute(text("""
+                    SELECT 
+                        CASE 
+                            WHEN selling_price <= 100 THEN '₹0–100'
+                            WHEN selling_price > 100 AND selling_price <= 300 THEN '₹100–300'
+                            WHEN selling_price > 300 AND selling_price <= 500 THEN '₹300–500'
+                            WHEN selling_price > 500 AND selling_price <= 1000 THEN '₹500–1K'
+                            WHEN selling_price > 1000 AND selling_price <= 3000 THEN '₹1K–3K'
+                            WHEN selling_price > 3000 AND selling_price <= 5000 THEN '₹3K–5K'
+                            ELSE '₹5K+'
+                        END as name,
+                        COUNT(*) as count
+                    FROM bigbasket
+                    WHERE selling_price IS NOT NULL AND selling_price > 0
+                    GROUP BY name
+                """)).mappings().fetchall()
+                data["bigbasket_price_range"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+                # bigbasket_price_vs_mrp
+                rows = conn.execute(text("""
+                    SELECT 
+                        main_category as name,
+                        ROUND(AVG(selling_price), 0) as `Sale Price`,
+                        ROUND(AVG(mrp), 0) as `Market Price`
+                    FROM bigbasket
+                    WHERE main_category IS NOT NULL AND selling_price > 0
+                    GROUP BY main_category
+                    ORDER BY `Sale Price` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["bigbasket_price_vs_mrp"] = [{"name": r["name"], "Sale Price": float(r["Sale Price"]), "Market Price": float(r["Market Price"])} for r in rows]
+
+                # bigbasket_ratings
+                rows = conn.execute(text("""
+                    SELECT 
+                        CASE 
+                            WHEN rating >= 1 AND rating < 2 THEN '1–2 ★'
+                            WHEN rating >= 2 AND rating < 3 THEN '2–3 ★'
+                            WHEN rating >= 3 AND rating < 4 THEN '3–4 ★'
+                            WHEN rating >= 4 AND rating < 4.5 THEN '4–4.5 ★'
+                            ELSE '4.5–5 ★'
+                        END as name,
+                        COUNT(*) as count
+                    FROM bigbasket
+                    WHERE rating IS NOT NULL AND rating > 0
+                    GROUP BY name
+                """)).mappings().fetchall()
+                data["bigbasket_ratings"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+                # bigbasket_discount
+                rows = conn.execute(text("""
+                    SELECT 
+                        main_category as name,
+                        ROUND(AVG(((mrp - selling_price) / mrp) * 100), 1) as `Avg Discount %`
+                    FROM bigbasket
+                    WHERE main_category IS NOT NULL AND mrp > selling_price AND mrp > 0
+                    GROUP BY main_category
+                    ORDER BY `Avg Discount %` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["bigbasket_discount"] = [{"name": r["name"], "Avg Discount %": float(r["Avg Discount %"])} for r in rows]
+
+                # bigbasket_top_rated
+                rows = conn.execute(text("""
+                    SELECT 
+                        main_category as name,
+                        ROUND(AVG(rating), 1) as `Avg Rating`
+                    FROM bigbasket
+                    WHERE main_category IS NOT NULL AND rating > 0
+                    GROUP BY main_category
+                    ORDER BY `Avg Rating` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["bigbasket_top_rated"] = [{"name": r["name"], "Avg Rating": float(r["Avg Rating"])} for r in rows]
+
+            if marketplace == 'dmart' or not marketplace or marketplace == 'all':
+                # dmart_categories
+                rows = conn.execute(text("SELECT category as name, COUNT(*) as value FROM dmart_products WHERE category IS NOT NULL GROUP BY category ORDER BY value DESC LIMIT 8")).mappings().fetchall()
+                data["dmart_categories"] = [{"name": r["name"], "value": int(r["value"])} for r in rows]
+
+                # dmart_brands
+                rows = conn.execute(text("SELECT Brand as name, COUNT(*) as count FROM dmart_products WHERE Brand IS NOT NULL AND Brand != '' GROUP BY Brand ORDER BY count DESC LIMIT 10")).mappings().fetchall()
+                data["dmart_brands"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+                # dmart_price_range
+                rows = conn.execute(text("""
+                    SELECT 
+                        CASE 
+                            WHEN CAST(NULLIF(price, '') AS DECIMAL(10,2)) <= 100 THEN '₹0–100'
+                            WHEN CAST(NULLIF(price, '') AS DECIMAL(10,2)) > 100 AND CAST(NULLIF(price, '') AS DECIMAL(10,2)) <= 300 THEN '₹100–300'
+                            WHEN CAST(NULLIF(price, '') AS DECIMAL(10,2)) > 300 AND CAST(NULLIF(price, '') AS DECIMAL(10,2)) <= 500 THEN '₹300–500'
+                            WHEN CAST(NULLIF(price, '') AS DECIMAL(10,2)) > 500 AND CAST(NULLIF(price, '') AS DECIMAL(10,2)) <= 1000 THEN '₹500–1K'
+                            WHEN CAST(NULLIF(price, '') AS DECIMAL(10,2)) > 1000 AND CAST(NULLIF(price, '') AS DECIMAL(10,2)) <= 3000 THEN '₹1K–3K'
+                            WHEN CAST(NULLIF(price, '') AS DECIMAL(10,2)) > 3000 AND CAST(NULLIF(price, '') AS DECIMAL(10,2)) <= 5000 THEN '₹3K–5K'
+                            ELSE '₹5K+'
+                        END as name,
+                        COUNT(*) as count
+                    FROM dmart_products
+                    WHERE price IS NOT NULL AND price != '' AND CAST(NULLIF(price, '') AS DECIMAL(10,2)) > 0
+                    GROUP BY name
+                """)).mappings().fetchall()
+                data["dmart_price_range"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+                # dmart_price_vs_mrp
+                rows = conn.execute(text("""
+                    SELECT 
+                        category as name,
+                        ROUND(AVG(CAST(NULLIF(price, '') AS DECIMAL(10,2))), 0) as `Sale Price`,
+                        ROUND(AVG(CAST(NULLIF(listPrice, '') AS DECIMAL(10,2))), 0) as `Market Price`
+                    FROM dmart_products
+                    WHERE category IS NOT NULL AND price != ''
+                    GROUP BY category
+                    ORDER BY `Sale Price` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["dmart_price_vs_mrp"] = [{"name": r["name"], "Sale Price": float(r["Sale Price"]), "Market Price": float(r["Market Price"])} for r in rows]
+
+                # dmart_stock
+                rows = conn.execute(text("""
+                    SELECT 
+                        CASE WHEN availability = 1 THEN 'In Stock' ELSE 'Out of Stock' END as name,
+                        COUNT(*) as value
+                    FROM dmart_products
+                    GROUP BY name
+                """)).mappings().fetchall()
+                data["dmart_stock"] = [{"name": r["name"], "value": int(r["value"])} for r in rows]
+
+                # dmart_discount
+                rows = conn.execute(text("""
+                    SELECT 
+                        category as name,
+                        ROUND(AVG(((CAST(NULLIF(listPrice, '') AS DECIMAL(10,2)) - CAST(NULLIF(price, '') AS DECIMAL(10,2))) / CAST(NULLIF(listPrice, '') AS DECIMAL(10,2))) * 100), 1) as `Avg Discount %`
+                    FROM dmart_products
+                    WHERE category IS NOT NULL 
+                      AND listPrice != '' AND price != '' 
+                      AND CAST(NULLIF(listPrice, '') AS DECIMAL(10,2)) > CAST(NULLIF(price, '') AS DECIMAL(10,2))
+                      AND CAST(NULLIF(listPrice, '') AS DECIMAL(10,2)) > 0
+                    GROUP BY category
+                    ORDER BY `Avg Discount %` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["dmart_discount"] = [{"name": r["name"], "Avg Discount %": float(r["Avg Discount %"])} for r in rows]
+
+                # dmart_brands_per_cat
+                rows = conn.execute(text("""
+                    SELECT 
+                        category as name,
+                        COUNT(DISTINCT Brand) as `Brands`,
+                        COUNT(*) as `Products`
+                    FROM dmart_products
+                    WHERE category IS NOT NULL
+                    GROUP BY category
+                    ORDER BY `Products` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["dmart_brands_per_cat"] = [{"name": r["name"], "Brands": int(r["Brands"]), "Products": int(r["Products"])} for r in rows]
+
+            if marketplace == 'indiamart' or not marketplace or marketplace == 'all':
+                # indiamart_categories
+                rows = conn.execute(text("SELECT category_name as name, COUNT(*) as value FROM indiamart_products WHERE category_name IS NOT NULL GROUP BY category_name ORDER BY value DESC LIMIT 8")).mappings().fetchall()
+                data["indiamart_categories"] = [{"name": r["name"], "value": int(r["value"])} for r in rows]
+
+                # indiamart_subcategories
+                rows = conn.execute(text("SELECT sub_category_name as name, COUNT(*) as value FROM indiamart_products WHERE sub_category_name IS NOT NULL GROUP BY sub_category_name ORDER BY value DESC LIMIT 8")).mappings().fetchall()
+                data["indiamart_subcategories"] = [{"name": r["name"], "value": int(r["value"])} for r in rows]
+
+                # indiamart_price_range
+                rows = conn.execute(text("""
+                    SELECT 
+                        CASE 
+                            WHEN price_numeric <= 100 THEN '₹0–100'
+                            WHEN price_numeric > 100 AND price_numeric <= 300 THEN '₹100–300'
+                            WHEN price_numeric > 300 AND price_numeric <= 500 THEN '₹300–500'
+                            WHEN price_numeric > 500 AND price_numeric <= 1000 THEN '₹500–1K'
+                            WHEN price_numeric > 1000 AND price_numeric <= 3000 THEN '₹1K–3K'
+                            WHEN price_numeric > 3000 AND price_numeric <= 5000 THEN '₹3K–5K'
+                            ELSE '₹5K+'
+                        END as name,
+                        COUNT(*) as count
+                    FROM indiamart_products
+                    WHERE price_numeric IS NOT NULL AND price_numeric > 0
+                    GROUP BY name
+                """)).mappings().fetchall()
+                data["indiamart_price_range"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+                # indiamart_ratings
+                rows = conn.execute(text("""
+                    SELECT 
+                        CASE 
+                            WHEN stars >= 1 AND stars < 2 THEN '1–2 ★'
+                            WHEN stars >= 2 AND stars < 3 THEN '2–3 ★'
+                            WHEN stars >= 3 AND stars < 4 THEN '3–4 ★'
+                            WHEN stars >= 4 AND stars < 4.5 THEN '4–4.5 ★'
+                            ELSE '4.5–5 ★'
+                        END as name,
+                        COUNT(*) as count
+                    FROM indiamart_products
+                    WHERE stars IS NOT NULL AND stars > 0
+                    GROUP BY name
+                """)).mappings().fetchall()
+                data["indiamart_ratings"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+                # indiamart_manufacturers
+                rows = conn.execute(text("SELECT manufacturer as name, COUNT(*) as count FROM indiamart_products WHERE manufacturer IS NOT NULL AND manufacturer != '' GROUP BY manufacturer ORDER BY count DESC LIMIT 10")).mappings().fetchall()
+                data["indiamart_manufacturers"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+                # indiamart_avg_price
+                rows = conn.execute(text("""
+                    SELECT 
+                        category_name as name,
+                        ROUND(AVG(price_numeric), 0) as `Avg Price`
+                    FROM indiamart_products
+                    WHERE category_name IS NOT NULL AND price_numeric > 0
+                    GROUP BY category_name
+                    ORDER BY `Avg Price` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["indiamart_avg_price"] = [{"name": r["name"], "Avg Price": float(r["Avg Price"])} for r in rows]
+
+                # indiamart_locations
+                rows = conn.execute(text("SELECT location as name, COUNT(*) as count FROM indiamart_products WHERE location IS NOT NULL AND location != '' GROUP BY location ORDER BY count DESC LIMIT 10")).mappings().fetchall()
+                data["indiamart_locations"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+            if marketplace == 'zepto' or not marketplace or marketplace == 'all':
+                # zepto_categories
+                rows = conn.execute(text("""
+                    SELECT 
+                        COALESCE(
+                            (SELECT parent.category 
+                             FROM Zepto_db_mapping zm 
+                             JOIN Zepto_db_mapping parent ON CAST(zm.`parent id` AS UNSIGNED) = parent.`category id`
+                             WHERE zm.category = z.main_category AND zm.`category level` = 2 LIMIT 1),
+                            (SELECT zm.category 
+                             FROM Zepto_db_mapping zm 
+                             WHERE zm.category = z.main_category AND zm.`category level` = 1 AND zm.category != 'All' LIMIT 1)
+                        ) as name,
+                        COUNT(*) as value 
+                    FROM zepto z 
+                    GROUP BY name 
+                    ORDER BY value DESC 
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["zepto_categories"] = [{"name": r["name"] or "Unmapped", "value": int(r["value"])} for r in rows]
+
+                # zepto_subcategories
+                rows = conn.execute(text("SELECT subcategory as name, COUNT(*) as value FROM zepto WHERE subcategory IS NOT NULL GROUP BY subcategory ORDER BY value DESC LIMIT 8")).mappings().fetchall()
+                data["zepto_subcategories"] = [{"name": r["name"], "value": int(r["value"])} for r in rows]
+
+                # zepto_price_range
+                rows = conn.execute(text("""
+                    SELECT 
+                        CASE 
+                            WHEN selling_price <= 100 THEN '₹0–100'
+                            WHEN selling_price > 100 AND selling_price <= 300 THEN '₹100–300'
+                            WHEN selling_price > 300 AND selling_price <= 500 THEN '₹300–500'
+                            WHEN selling_price > 500 AND selling_price <= 1000 THEN '₹500–1K'
+                            WHEN selling_price > 1000 AND selling_price <= 3000 THEN '₹1K–3K'
+                            WHEN selling_price > 3000 AND selling_price <= 5000 THEN '₹3K–5K'
+                            ELSE '₹5K+'
+                        END as name,
+                        COUNT(*) as count
+                    FROM zepto
+                    WHERE selling_price IS NOT NULL AND selling_price > 0
+                    GROUP BY name
+                """)).mappings().fetchall()
+                data["zepto_price_range"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+                # zepto_ratings
+                rows = conn.execute(text("""
+                    SELECT 
+                        CASE 
+                            WHEN rating >= 1 AND rating < 2 THEN '1–2 ★'
+                            WHEN rating >= 2 AND rating < 3 THEN '2–3 ★'
+                            WHEN rating >= 3 AND rating < 4 THEN '3–4 ★'
+                            WHEN rating >= 4 AND rating < 4.5 THEN '4–4.5 ★'
+                            ELSE '4.5–5 ★'
+                        END as name,
+                        COUNT(*) as count
+                    FROM zepto
+                    WHERE rating IS NOT NULL AND rating > 0
+                    GROUP BY name
+                """)).mappings().fetchall()
+                data["zepto_ratings"] = [{"name": r["name"], "count": int(r["count"])} for r in rows]
+
+                # zepto_discount
+                rows = conn.execute(text("""
+                    SELECT 
+                        COALESCE(
+                            (SELECT parent.category 
+                             FROM Zepto_db_mapping zm 
+                             JOIN Zepto_db_mapping parent ON CAST(zm.`parent id` AS UNSIGNED) = parent.`category id`
+                             WHERE zm.category = z.main_category AND zm.`category level` = 2 LIMIT 1),
+                            (SELECT zm.category 
+                             FROM Zepto_db_mapping zm 
+                             WHERE zm.category = z.main_category AND zm.`category level` = 1 AND zm.category != 'All' LIMIT 1)
+                        ) as name,
+                        ROUND(AVG(((z.mrp - z.selling_price) / z.mrp) * 100), 1) as `Avg Discount %`
+                    FROM zepto z
+                    WHERE z.mrp > z.selling_price AND z.mrp > 0
+                    GROUP BY name
+                    ORDER BY `Avg Discount %` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["zepto_discount"] = [{"name": r["name"] or "Unmapped", "Avg Discount %": float(r["Avg Discount %"])} for r in rows]
+
+                # zepto_top_rated
+                rows = conn.execute(text("""
+                    SELECT 
+                        COALESCE(
+                            (SELECT parent.category 
+                             FROM Zepto_db_mapping zm 
+                             JOIN Zepto_db_mapping parent ON CAST(zm.`parent id` AS UNSIGNED) = parent.`category id`
+                             WHERE zm.category = z.main_category AND zm.`category level` = 2 LIMIT 1),
+                            (SELECT zm.category 
+                             FROM Zepto_db_mapping zm 
+                             WHERE zm.category = z.main_category AND zm.`category level` = 1 AND zm.category != 'All' LIMIT 1)
+                        ) as name,
+                        ROUND(AVG(z.rating), 1) as `Avg Rating`
+                    FROM zepto z
+                    WHERE z.rating > 0
+                    GROUP BY name
+                    ORDER BY `Avg Rating` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["zepto_top_rated"] = [{"name": r["name"] or "Unmapped", "Avg Rating": float(r["Avg Rating"])} for r in rows]
+
+                # zepto_price_vs_mrp
+                rows = conn.execute(text("""
+                    SELECT 
+                        COALESCE(
+                            (SELECT parent.category 
+                             FROM Zepto_db_mapping zm 
+                             JOIN Zepto_db_mapping parent ON CAST(zm.`parent id` AS UNSIGNED) = parent.`category id`
+                             WHERE zm.category = z.main_category AND zm.`category level` = 2 LIMIT 1),
+                            (SELECT zm.category 
+                             FROM Zepto_db_mapping zm 
+                             WHERE zm.category = z.main_category AND zm.`category level` = 1 AND zm.category != 'All' LIMIT 1)
+                        ) as name,
+                        ROUND(AVG(z.selling_price), 0) as `Sale Price`,
+                        ROUND(AVG(z.mrp), 0) as `Market Price`
+                    FROM zepto z
+                    WHERE z.selling_price > 0
+                    GROUP BY name
+                    ORDER BY `Sale Price` DESC
+                    LIMIT 8
+                """)).mappings().fetchall()
+                data["zepto_price_vs_mrp"] = [{"name": r["name"] or "Unmapped", "Sale Price": float(r["Sale Price"]), "Market Price": float(r["Market Price"])} for r in rows]
+
+        return jsonify({"status": "success", "data": data}), 200
+    except Exception as e:
+        print(f"[product_report] chart-data error: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
