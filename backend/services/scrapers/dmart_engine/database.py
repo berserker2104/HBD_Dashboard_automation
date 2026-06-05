@@ -207,9 +207,12 @@ class DatabaseManager:
             self.cursor.execute("PRAGMA temp_store=MEMORY")    # Temp tables in RAM
 
             # Initialize schema if provided
-            if self.schema_path and self.schema_path.exists():
-                self._init_schema()
-                self._migrate_sqlite_columns()
+            if self.schema_path:
+                if self.schema_path.exists():
+                    self._init_schema()
+                    self._migrate_sqlite_columns()
+                else:
+                    raise FileNotFoundError(f"SQLite schema file not found at: {self.schema_path.absolute()}")
 
             logger.info(f"Database connected: {self.db_path}")
 
