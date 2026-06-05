@@ -175,9 +175,7 @@ def has_marketplace_data(conn, marketplace):
 @product_report_bp.route('/summary', methods=['GET'])
 def get_report_summary():
     """
-    Fetch the latest summary counts.
-    For Zepto: always uses live DB queries (cache was stale).
-    For All: aggregates across all marketplaces but uses live Zepto.
+    Fetch the latest summary counts from the product_dashboard_report_summary table.
     Accepts `marketplace` query parameter.
     """
     marketplace = request.args.get('marketplace', '').strip()
@@ -202,45 +200,8 @@ def get_report_summary():
                     }
                 }), 200
 
-            # ── ZEPTO: always use live counts (cache has wrong data) ──
-            if marketplace.lower() == 'zepto':
-                row = conn.execute(text("""
-                    SELECT 
-                        (SELECT COUNT(DISTINCT category) FROM zepto_db_mapping WHERE category_level = 1 AND category != 'All') as total_categories,
-                        COUNT(*) as total_products,
-                        SUM(CASE WHEN z.main_category IN (
-                            SELECT DISTINCT category FROM zepto_db_mapping WHERE category IS NOT NULL AND category != 'All'
-                        ) THEN 1 ELSE 0 END) as mapped_products,
-                        SUM(CASE WHEN z.main_category NOT IN (
-                            SELECT DISTINCT category FROM zepto_db_mapping WHERE category IS NOT NULL AND category != 'All'
-                        ) OR z.main_category IS NULL THEN 1 ELSE 0 END) as unmapped_products,
-                        COUNT(DISTINCT CASE WHEN z.main_category IN (
-                            SELECT DISTINCT category FROM zepto_db_mapping WHERE category IS NOT NULL AND category != 'All'
-                        ) THEN z.main_category END) as completed_categories,
-                        0 as pending_categories,
-                        COUNT(*) as available_products,
-                        0 as out_of_stock_products,
-                        COUNT(DISTINCT SUBSTRING_INDEX(z.product_name, ' ', 1)) as total_brands,
-                        ROUND(AVG(COALESCE(z.selling_price, 0)), 2) as avg_selling_price
-                    FROM zepto z
-                """)).mappings().fetchone()
-                data = {
-                    "total_categories": int(row["total_categories"]) if row["total_categories"] is not None else 39,
-                    "total_products": int(row["total_products"]) if row["total_products"] is not None else 0,
-                    "mapped_products": int(row["mapped_products"]) if row["mapped_products"] is not None else 0,
-                    "unmapped_products": int(row["unmapped_products"]) if row["unmapped_products"] is not None else 0,
-                    "completed_categories": int(row["completed_categories"]) if row["completed_categories"] is not None else 0,
-                    "pending_categories": int(row["pending_categories"]) if row["pending_categories"] is not None else 0,
-                    "available_products": int(row["available_products"]) if row["available_products"] is not None else 0,
-                    "out_of_stock_products": 0,
-                    "total_brands": int(row["total_brands"]) if row["total_brands"] is not None else 0,
-                    "avg_selling_price": float(row["avg_selling_price"]) if row["avg_selling_price"] is not None else 0.0,
-                    "status_badge": "Active"
-                }
-                return jsonify({"status": "success", "data": data}), 200
-
             if not marketplace or marketplace.lower() == 'all':
-                # Aggregate globally - use cached summary but override Zepto with live count
+                # Aggregate globally across all marketplaces stored in product_dashboard_report_summary
                 row = conn.execute(text("""
                     SELECT
                         SUM(total_categories) as total_categories,
@@ -253,24 +214,15 @@ def get_report_summary():
                         SUM(out_of_stock_products) as out_of_stock_products,
                         SUM(total_brands) as total_brands,
                         AVG(avg_selling_price) as avg_selling_price
-                    FROM product_dashboard_report_summary
-                    WHERE LOWER(marketplace_name) != 'zepto'
+                    FROM product_dashboard_report_summary p
+                    WHERE p.id IN (
+                        SELECT MAX(id)
+                        FROM product_dashboard_report_summary
+                        GROUP BY LOWER(marketplace_name)
+                    )
                 """)).mappings().fetchone()
-
-                # Add live Zepto count
-                z_row = conn.execute(text("""
-                    SELECT COUNT(*) as tp,
-                        (SELECT COUNT(DISTINCT category) FROM zepto_db_mapping WHERE category_level = 1 AND category != 'All') as tc
-                    FROM zepto
-                """)).mappings().fetchone()
-                z_total = int(z_row['tp'] or 0)
-                z_cats = int(z_row['tc'] or 39)
-
-                total_products = int(row['total_products'] or 0) + z_total
-                total_categories = int(row['total_categories'] or 0) + z_cats
-
             else:
-                # Filter by marketplace (non-zepto)
+                # Filter by marketplace, getting the latest summary record
                 row = conn.execute(text("""
                     SELECT
                         total_categories,
@@ -288,10 +240,6 @@ def get_report_summary():
                     ORDER BY id DESC
                     LIMIT 1
                 """), {"marketplace": marketplace}).mappings().fetchone()
-                total_products = None
-                total_categories = None
-                z_total = 0
-                z_cats = 0
 
             if not row or row["total_products"] is None:
                 return jsonify({
@@ -311,18 +259,17 @@ def get_report_summary():
                     }
                 }), 200
 
-            is_all = not marketplace or marketplace.lower() == 'all'
             data = {
-                "total_categories": (total_categories if is_all else int(row["total_categories"] or 0)),
-                "total_products": (total_products if is_all else int(row["total_products"] or 0)),
-                "mapped_products": int(row["mapped_products"]) if row["mapped_products"] is not None else 0,
-                "unmapped_products": int(row["unmapped_products"]) if row["unmapped_products"] is not None else 0,
-                "completed_categories": int(row["completed_categories"]) if row["completed_categories"] is not None else 0,
-                "pending_categories": int(row["pending_categories"]) if row["pending_categories"] is not None else 0,
-                "available_products": int(row["available_products"]) if row["available_products"] is not None else 0,
-                "out_of_stock_products": int(row["out_of_stock_products"]) if row["out_of_stock_products"] is not None else 0,
-                "total_brands": int(row["total_brands"]) if row["total_brands"] is not None else 0,
-                "avg_selling_price": float(row["avg_selling_price"]) if row["avg_selling_price"] is not None else 0.0,
+                "total_categories": int(row["total_categories"] or 0),
+                "total_products": int(row["total_products"] or 0),
+                "mapped_products": int(row["mapped_products"] or 0),
+                "unmapped_products": int(row["unmapped_products"] or 0),
+                "completed_categories": int(row["completed_categories"] or 0),
+                "pending_categories": int(row["pending_categories"] or 0),
+                "available_products": int(row["available_products"] or 0),
+                "out_of_stock_products": int(row["out_of_stock_products"] or 0),
+                "total_brands": int(row["total_brands"] or 0),
+                "avg_selling_price": float(row["avg_selling_price"] or 0.0),
                 "status_badge": "Active"
             }
 
@@ -2107,7 +2054,35 @@ def get_chart_data():
                 data.update(amazon_data)
                 
             if marketplace == 'amazon' or not marketplace or marketplace == 'all':
-                data.update(amazon_data)
+                # Query actual category wise counts from amazon_products table dynamically
+                try:
+                    am_cat_rows = conn.execute(text("""
+                        SELECT categoryName as name, COUNT(*) as value
+                        FROM amazon_products
+                        WHERE categoryName IS NOT NULL AND categoryName != ''
+                        GROUP BY categoryName
+                        ORDER BY value DESC
+                    """)).mappings().fetchall()
+                    
+                    translated_cats = {}
+                    for r in am_cat_rows:
+                        raw_name = r["name"]
+                        translated_name = CATEGORY_TRANSLATION.get(raw_name, clean_hindi_text(raw_name) or "Other")
+                        translated_cats[translated_name] = translated_cats.get(translated_name, 0) + int(r["value"])
+                        
+                    sorted_cats = sorted(translated_cats.items(), key=lambda x: x[1], reverse=True)
+                    top_cats = sorted_cats[:7]
+                    others_value = sum(x[1] for x in sorted_cats[7:])
+                    
+                    amazon_categories_list = [{"name": name, "value": value} for name, value in top_cats]
+                    if others_value > 0:
+                        amazon_categories_list.append({"name": "Others", "value": others_value})
+                    
+                    data.update(amazon_data)
+                    data["amazon_categories"] = amazon_categories_list
+                except Exception as am_ex:
+                    print(f"[product_report] Failed to query dynamic amazon categories: {am_ex}")
+                    data.update(amazon_data)
 
             if marketplace == 'blinkit' or not marketplace or marketplace == 'all':
                 # blinkit_categories

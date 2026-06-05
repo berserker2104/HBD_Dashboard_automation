@@ -1412,31 +1412,50 @@ export default function ProductDataReport() {
         <div className="pdr-spinner-wrap"><div className="pdr-spinner" /><span className="pdr-spinner-text">Loading analytics…</span></div>
       ) : summary && !isPending ? (
         <div className="pdr-kpi-grid">
-          {(() => {
-            // Get live mapping counts for current platform
-            let lMapped = 0, lUnmapped = 0, lCats = 0;
-            if (platform === "All") {
-              Object.values(liveMapping).forEach(d => {
-                lMapped += d.mapped || 0;
-                lUnmapped += d.unmapped || 0;
-                lCats += d.categories || 0;
-              });
-            } else {
-              const d = liveMapping[platform.toLowerCase()] || {};
-              lMapped = d.mapped || 0;
-              lUnmapped = d.unmapped || 0;
-              lCats = d.categories || 0;
-            }
-            const haslive = lMapped > 0 || lUnmapped > 0;
-            return [
-              { label: "Total Products", value: Number(summary.total_products || 0).toLocaleString("en-IN"), sub: haslive ? `${Number(lMapped).toLocaleString("en-IN")} mapped` : `${Number(summary.mapped_products || 0).toLocaleString()} mapped`, icon: "📊", accent: pt.accent },
-              { label: "Avg Selling Price", value: `₹${Number(summary.avg_selling_price || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`, sub: `${Number(summary.total_brands || 0)} brands`, icon: "💰", accent: "#f59e0b" },
-              { label: "In Stock Rate", value: `${summary.total_products > 0 ? ((summary.available_products / summary.total_products) * 100).toFixed(1) : 0}%`, sub: `${Number(summary.available_products || 0).toLocaleString()} available`, icon: "✅", accent: "#22c55e" },
-              { label: "Mapped Categories", value: haslive ? Number(lCats).toLocaleString("en-IN") : Number(summary.total_categories || 0).toLocaleString(), sub: haslive ? `Live from DB mapping tables` : `${summary.completed_categories} mapped · ${summary.pending_categories} pending`, icon: "📁", accent: "#6366f1" },
-              { label: "Mapped Products", value: haslive ? Number(lMapped).toLocaleString("en-IN") : Number(summary.mapped_products || 0).toLocaleString("en-IN"), sub: haslive ? `${Number(lUnmapped).toLocaleString("en-IN")} unmapped` : `${summary.unmapped_products || 0} unmapped`, icon: "🔗", accent: "#8b5cf6" },
-              { label: "Out of Stock", value: Number(summary.out_of_stock_products || 0).toLocaleString("en-IN"), sub: `${summary.total_products > 0 ? ((summary.out_of_stock_products / summary.total_products) * 100).toFixed(1) : 0}% of catalog`, icon: "⚠️", accent: "#f43f5e" },
-            ];
-          })().map((k, i) => (
+          {[
+            { 
+              label: "Total Products", 
+              value: Number(summary.total_products || 0).toLocaleString("en-IN"), 
+              sub: `${Number(summary.mapped_products || 0).toLocaleString("en-IN")} mapped`, 
+              icon: "📊", 
+              accent: pt.accent 
+            },
+            { 
+              label: "Avg Selling Price", 
+              value: `₹${Number(summary.avg_selling_price || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`, 
+              sub: `${Number(summary.total_brands || 0)} brands`, 
+              icon: "💰", 
+              accent: "#f59e0b" 
+            },
+            { 
+              label: "In Stock Rate", 
+              value: `${summary.total_products > 0 ? ((summary.available_products / summary.total_products) * 100).toFixed(1) : 0}%`, 
+              sub: `${Number(summary.available_products || 0).toLocaleString("en-IN")} available`, 
+              icon: "✅", 
+              accent: "#22c55e" 
+            },
+            { 
+              label: "Mapped Categories", 
+              value: Number(summary.completed_categories || 0).toLocaleString("en-IN"), 
+              sub: `${summary.completed_categories} mapped · ${summary.pending_categories} pending`, 
+              icon: "📁", 
+              accent: "#6366f1" 
+            },
+            { 
+              label: "Mapped Products", 
+              value: Number(summary.mapped_products || 0).toLocaleString("en-IN"), 
+              sub: `${summary.unmapped_products || 0} unmapped`, 
+              icon: "🔗", 
+              accent: "#8b5cf6" 
+            },
+            { 
+              label: "Out of Stock", 
+              value: Number(summary.out_of_stock_products || 0).toLocaleString("en-IN"), 
+              sub: `${summary.total_products > 0 ? ((summary.out_of_stock_products / summary.total_products) * 100).toFixed(1) : 0}% of catalog`, 
+              icon: "⚠️", 
+              accent: "#f43f5e" 
+            },
+          ].map((k, i) => (
             <div key={i} className="pdr-kpi-card" style={{ "--accent": k.accent }}>
               <div className="kpi-icon">{k.icon}</div>
               <div className="kpi-label">{k.label}</div>

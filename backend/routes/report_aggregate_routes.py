@@ -58,7 +58,7 @@ def get_report_aggregate():
         
         if summary_table:
             try:
-                summary_rows = session.execute(text(f"SELECT * FROM `{summary_table}`")).fetchall()
+                summary_rows = session.execute(text(f"SELECT * FROM `{summary_table}` ORDER BY id DESC")).fetchall()
                 if summary_rows:
                     first = dict(summary_rows[0]._mapping)
                     summary = {

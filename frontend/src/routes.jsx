@@ -172,7 +172,7 @@ export const routes = [
         children: [
           {
             icon: <ChartBarIcon {...icon} />,
-            name: "Overview",
+            name: "Listing data report",
             path: "/home2",
             element: <ReportDashboard />,
           },
