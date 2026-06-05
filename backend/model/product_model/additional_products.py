@@ -33,6 +33,26 @@ class Blinkit(db.Model):
             "product_url": self.product_url
         }
 
+class DMartCategory(db.Model):
+    __tablename__ = 'dmart_categories'
+    category_id = db.Column(db.Integer, primary_key=True)
+    category_name = db.Column(db.String(255), nullable=False)
+    slug = db.Column(db.String(255), nullable=True)
+    parent_id = db.Column(db.Integer, db.ForeignKey('dmart_categories.category_id', ondelete='SET NULL'), nullable=True)
+    category_level = db.Column(db.Integer, nullable=True)
+    category_path = db.Column(db.String(512), nullable=True)
+
+    parent = db.relationship('DMartCategory', remote_side=[category_id], backref='children')
+
+    def to_dict(self):
+        return {
+            "category_id": self.category_id,
+            "category_name": self.category_name,
+            "slug": self.slug,
+            "parent_id": self.parent_id,
+            "category_level": self.category_level,
+            "category_path": self.category_path
+        }
 
 class DMart(db.Model):
     """dmart_products table — 10,740 rows.
@@ -53,6 +73,34 @@ class DMart(db.Model):
     category_id = db.Column(db.Integer)
     quantity = db.Column(db.String(100))
     availability = db.Column(db.Integer)
+    asin = db.Column('ASIN', db.String(100))
+    title = db.Column('Product_name', db.Text)
+    imgUrl = db.Column('Image_URLs', db.Text)
+    productUrl = db.Column('link', db.Text)
+    price = db.Column('price', db.String(100))
+    listPrice = db.Column('listPrice', db.String(100), nullable=True)
+    categoryName = db.Column('category', db.String(255))
+    brand = db.Column('Brand', db.String(255))
+    category_id = db.Column(db.Integer, db.ForeignKey('dmart_categories.category_id', ondelete='SET NULL'), nullable=True)
+    quantity = db.Column('quantity', db.String(100), nullable=True)
+    availability = db.Column('availability', db.Integer, default=1)
+    scraped_at = db.Column('scraped_at', db.DateTime, default=db.func.current_timestamp(), onupdate=db.func.current_timestamp())
+
+    @property
+    def isBestSeller(self):
+        return "false"
+
+    @isBestSeller.setter
+    def isBestSeller(self, value):
+        pass
+
+    @property
+    def boughtInLastMonth(self):
+        return "0"
+
+    @boughtInLastMonth.setter
+    def boughtInLastMonth(self, value):
+        pass
 
     def to_dict(self):
         return {
@@ -67,6 +115,12 @@ class DMart(db.Model):
             "availability": bool(self.availability) if self.availability is not None else True,
             "image_url": self.Image_URLs,
             "link": self.link,
+            "category": self.categoryName,
+            "category_id": self.category_id,
+            "quantity": self.quantity,
+            "availability": self.availability,
+            "link": self.productUrl,
+            "scraped_at": self.scraped_at.isoformat() if self.scraped_at else None
         }
 
 

@@ -671,6 +671,12 @@ export const routes = [
             path: "/scrapper/google-map",
             element: <GoogleMapScrapper />,
           },
+          {
+            icon: <ShoppingCartIcon {...icon} />,
+            name: "D-Mart",
+            path: "/scrapper/dmart",
+            element: <DmartScrapper />,
+          },
           // ... rest of scrappers
           {
             icon: <ShoppingCartIcon {...icon} />,

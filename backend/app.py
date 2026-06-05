@@ -45,6 +45,7 @@ from model.product_model.additional_products import BigBasketNew, Zepto
 from routes.auth_route import auth_bp
 from routes.scraper_routes import scraper_bp
 from routes.amazon_routes import amazon_api_bp
+from routes.dmart_routes import dmart_api_bp
 from routes.googlemap import googlemap_bp 
 from routes.master_table import master_table_bp
 from routes.upload_product_csv import product_csv_bp
@@ -134,6 +135,13 @@ with app.app_context():
         run_pending_migrations(app)
     except ImportError:
         pass
+    finally:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        finally:
+            db.session.remove()
 
 # --- GLOBAL JWT PROTECTION ---
 PUBLIC_ROUTES = [
@@ -191,6 +199,8 @@ PUBLIC_ROUTES = [
     "/api/product-report/mapping/dmart",
     "/api/product-report/mapping/indiamart",
     "/api/product-report/mapping/zepto",
+    "/api/scrape_dmart",
+    "/api/scrape_amazon",
 ]
 
 @app.before_request
@@ -203,6 +213,8 @@ def protect_all_routes():
 
     # Bypass for whitelist, fetch-data routes, or listing-upload / product-report / source- prefix
     if normalized_path in public_paths or normalized_path.endswith('/fetch-data') or normalized_path.startswith('/api/listing-upload') or normalized_path.startswith('/api/product-report') or normalized_path.startswith('/api/report/source-'):
+    # Bypass for whitelist, fetch-data routes, or listing-upload / product-report / tasks prefix
+    if normalized_path in public_paths or normalized_path.endswith('/fetch-data') or normalized_path.startswith('/api/listing-upload') or normalized_path.startswith('/api/product-report') or normalized_path.startswith('/api/tasks'):
         return None
 
     try:
@@ -217,6 +229,7 @@ def protect_all_routes():
 app.register_blueprint(auth_bp, url_prefix="/api/auth")
 app.register_blueprint(scraper_bp, url_prefix="/api")
 app.register_blueprint(amazon_api_bp, url_prefix="/api")
+app.register_blueprint(dmart_api_bp, url_prefix="/api")
 app.register_blueprint(googlemap_bp, url_prefix='/api')
 app.register_blueprint(master_table_bp)
 app.register_blueprint(product_csv_bp)
