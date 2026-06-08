@@ -7,15 +7,15 @@ class ScraperTask(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     platform = db.Column(db.String(50))
     
-    # REVERTED: Change 'query' back to 'search_query' to match your DB
-    search_query = db.Column('search_query', db.String(255)) 
+    # Mapped to the actual 'query' column in MySQL DB
+    search_query = db.Column('query', db.String(255)) 
     
     location = db.Column(db.String(255), nullable=True)
     status = db.Column(db.String(50), default="PENDING")
     progress = db.Column(db.Integer, default=0)
     
-    # REVERTED: Change 'total_leads' back to 'total_found' to match your DB
-    total_found = db.Column('total_found', db.Integer, default=0)
+    # Mapped to the actual 'total_leads' column in MySQL DB
+    total_found = db.Column('total_leads', db.Integer, default=0)
     
     last_index = db.Column(db.Integer, default=0)
     should_stop = db.Column(db.Boolean, default=False)

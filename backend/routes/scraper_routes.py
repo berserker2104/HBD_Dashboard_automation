@@ -65,6 +65,34 @@ def start_deep_scrape():
 
     return jsonify({"message": "Deep Scraper Started", "task_id": new_task.id}), 202
 
+@scraper_bp.route('/tasks/<int:task_id>', methods=['GET'])
+def get_task(task_id):
+    try:
+        task = ScraperTask.query.get(task_id)
+        if task:
+            return jsonify(task.to_dict()), 200
+        return jsonify({"error": "Task not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@scraper_bp.route('/tasks/<int:task_id>/logs', methods=['GET'])
+def get_task_logs(task_id):
+    try:
+        import os
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        log_file_path = os.path.join(backend_dir, "logs", f"dmart_task_{task_id}.log")
+        
+        if not os.path.exists(log_file_path):
+            return jsonify({"logs": []}), 200
+            
+        with open(log_file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+            
+        cleaned_lines = [line.strip() for line in lines if line.strip()]
+        return jsonify({"logs": cleaned_lines}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @scraper_bp.route('/results', methods=['GET']) # url_prefix makes this /api/results
 def api_results():
     pass

@@ -2,22 +2,26 @@ import warnings
 warnings.filterwarnings("ignore", message="urllib3.*charset_normalizer.*doesn't match")
 warnings.filterwarnings("ignore", module="requests")
 
-from gevent import monkey
-monkey.patch_all()
+import sys
 
-# Patch gevent hub IMMEDIATELY after monkey-patching so the pidbox greenlet
-# never prints its noisy TimeoutError traceback to stderr.
-import gevent
-try:
-    _hub = gevent.get_hub()
-    _not_err = _hub.NOT_ERROR
-    import redis as _redis_mod
-    for _exc in (TimeoutError, _redis_mod.exceptions.TimeoutError):
-        if _exc not in _not_err:
-            _not_err = _not_err + (_exc,)
-    _hub.NOT_ERROR = _not_err
-except Exception:
-    pass
+# Only monkeypatch gevent if running as the Celery worker process
+if any('celery' in arg.lower() for arg in sys.argv):
+    from gevent import monkey
+    monkey.patch_all()
+
+    # Patch gevent hub IMMEDIATELY after monkey-patching so the pidbox greenlet
+    # never prints its noisy TimeoutError traceback to stderr.
+    try:
+        import gevent
+        _hub = gevent.get_hub()
+        _not_err = _hub.NOT_ERROR
+        import redis as _redis_mod
+        for _exc in (TimeoutError, _redis_mod.exceptions.TimeoutError):
+            if _exc not in _not_err:
+                _not_err = _not_err + (_exc,)
+        _hub.NOT_ERROR = _not_err
+    except Exception:
+        pass
 
 import os
 import re
@@ -153,6 +157,7 @@ import tasks.products_task.upload_amazon_products_task
 import tasks.products_task.upload_big_basket_task
 import tasks.products_task.upload_zepto_task
 import tasks.products_task.amazon_scraper_task
+import tasks.products_task.dmart_scraper_task
 import tasks.gdrive_task.etl_tasks
 import tasks.deep_scraper_task
 

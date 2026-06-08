@@ -33,11 +33,31 @@ class Blinkit(db.Model):
             "product_url": self.product_url
         }
 
+class DMartCategory(db.Model):
+    __tablename__ = 'dmart_categories'
+    category_id = db.Column(db.Integer, primary_key=True)
+    category_name = db.Column(db.String(255), nullable=False)
+    slug = db.Column(db.String(255), nullable=True)
+    parent_id = db.Column(db.Integer, db.ForeignKey('dmart_categories.category_id', ondelete='SET NULL'), nullable=True)
+    category_level = db.Column(db.Integer, nullable=True)
+    category_path = db.Column(db.String(512), nullable=True)
+
+    parent = db.relationship('DMartCategory', remote_side=[category_id], backref='children')
+
+    def to_dict(self):
+        return {
+            "category_id": self.category_id,
+            "category_name": self.category_name,
+            "slug": self.slug,
+            "parent_id": self.parent_id,
+            "category_level": self.category_level,
+            "category_path": self.category_path
+        }
 
 class DMart(db.Model):
     """dmart_products table — 10,740 rows.
     Actual columns: id, ASIN, Product_name, Image_URLs, link, price, listPrice,
-                    category, Brand, description, category_id, quantity, availability
+                    category, Brand, category_id, quantity, availability
     """
     __tablename__ = 'dmart_products'
     id = db.Column(db.Integer, primary_key=True)
@@ -45,14 +65,78 @@ class DMart(db.Model):
     Product_name = db.Column('Product_name', db.Text)
     Image_URLs = db.Column('Image_URLs', db.Text)
     link = db.Column(db.Text)
-    price = db.Column(db.String(100))
-    listPrice = db.Column(db.String(100))
+    price = db.Column('price', db.String(100))
+    listPrice = db.Column('listPrice', db.String(100), nullable=True)
     category = db.Column(db.String(255))
     Brand = db.Column('Brand', db.String(255))
-    description = db.Column(db.Text)
-    category_id = db.Column(db.Integer)
-    quantity = db.Column(db.String(100))
-    availability = db.Column(db.Integer)
+    category_id = db.Column(db.Integer, db.ForeignKey('dmart_categories.category_id', ondelete='SET NULL'), nullable=True)
+    quantity = db.Column('quantity', db.String(100), nullable=True)
+    availability = db.Column('availability', db.Integer, default=1)
+    scraped_at = db.Column('scraped_at', db.DateTime, default=db.func.current_timestamp(), onupdate=db.func.current_timestamp())
+
+    @property
+    def asin(self):
+        return self.ASIN
+
+    @asin.setter
+    def asin(self, value):
+        self.ASIN = value
+
+    @property
+    def title(self):
+        return self.Product_name
+
+    @title.setter
+    def title(self, value):
+        self.Product_name = value
+
+    @property
+    def imgUrl(self):
+        return self.Image_URLs
+
+    @imgUrl.setter
+    def imgUrl(self, value):
+        self.Image_URLs = value
+
+    @property
+    def productUrl(self):
+        return self.link
+
+    @productUrl.setter
+    def productUrl(self, value):
+        self.link = value
+
+    @property
+    def categoryName(self):
+        return self.category
+
+    @categoryName.setter
+    def categoryName(self, value):
+        self.category = value
+
+    @property
+    def brand(self):
+        return self.Brand
+
+    @brand.setter
+    def brand(self, value):
+        self.Brand = value
+
+    @property
+    def isBestSeller(self):
+        return "false"
+
+    @isBestSeller.setter
+    def isBestSeller(self, value):
+        pass
+
+    @property
+    def boughtInLastMonth(self):
+        return "0"
+
+    @boughtInLastMonth.setter
+    def boughtInLastMonth(self, value):
+        pass
 
     def to_dict(self):
         return {
@@ -61,12 +145,14 @@ class DMart(db.Model):
             "name": self.Product_name,
             "price": self.price,
             "list_price": self.listPrice,
-            "category": self.category,
             "brand": self.Brand,
+            "category": self.category,
+            "category_id": self.category_id,
             "quantity": self.quantity,
             "availability": bool(self.availability) if self.availability is not None else True,
             "image_url": self.Image_URLs,
             "link": self.link,
+            "scraped_at": self.scraped_at.isoformat() if self.scraped_at else None
         }
 
 
