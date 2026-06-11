@@ -305,6 +305,11 @@ class ZeptoScraper:
             logger.error(f"JSONL stream write failed: {e}")
 
     async def _process_api_products_batch(self, page: Page) -> int:
+        """Convert intercepted API payloads into cleaned product rows.
+
+        Zepto payload schemas can vary. This method is tolerant and only
+        requires sku_id + product_name to be present after cleaning.
+        """
         if not self._api_payload_products:
             return 0
 
@@ -315,10 +320,13 @@ class ZeptoScraper:
         for raw in raw_products:
             try:
                 cleaned = DataCleaner.clean_product_data(raw)
+
                 sku = str(cleaned.get("sku_id") or "").strip()
                 name = cleaned.get("product_name")
                 pack_size = cleaned.get("pack_size")
 
+                # IMPORTANT: some Zepto APIs provide title but not a stable sku_id.
+                # We still allow DOM-level scraping to fill gaps by skipping here.
                 if not sku or not name:
                     continue
 
@@ -326,11 +334,9 @@ class ZeptoScraper:
                 if sku in self.scraped_skus or namepack in self.scraped_namepack:
                     continue
 
-                # Stage 1 output
                 if self.current_jsonl_path:
                     await self._stream_to_jsonl(cleaned, self.current_jsonl_path)
 
-                # Category assignment: main/subcategory fields
                 cat_id = self.current_category_id
                 if cat_id is None:
                     cat_id = self.db.resolve_category_path(
@@ -344,16 +350,21 @@ class ZeptoScraper:
                     },
                     category_id=cat_id,
                 )
+
                 if ok:
                     self.scraped_skus.add(sku)
                     self.scraped_namepack.add(namepack)
                     new_saved += 1
+
             except Exception:
                 self.stats["products_failed"] += 1
 
         page.category_products_scraped += new_saved
         self.stats["products_scraped"] += new_saved
         return new_saved
+
+    # NOTE: The implementation above is the only _process_api_products_batch.
+
 
     async def _extract_products_from_dom(self, page: Page) -> List[dict]:
         # Light DOM fallback.
