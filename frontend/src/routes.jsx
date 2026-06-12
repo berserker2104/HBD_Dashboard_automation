@@ -120,6 +120,8 @@ import { SignUp } from "./pages/auth/sign-up";
 import MasterDataDashboard from "./componunts/MasterDataDashboard";
 import { element } from "prop-types";
 import LocationMasterData from "./componunts/masterdata/LocationMasterData";
+import MasterCategoryManager from "./componunts/masterdata/MasterCategoryManager";
+import CategoryMappingDashboard from "./componunts/masterdata/CategoryMappingDashboard";
 const icon = {
   className: "w-5 h-5 text-inherit",
 };
@@ -435,6 +437,18 @@ export const routes = [
             name: "Product Category",
             path: "/masterdata/product-category",
             element: <ProductCategory />,
+          },
+          {
+            icon: <TableCellsIcon {...icon} />,
+            name: "Master Categories",
+            path: "/masterdata/master-categories",
+            element: <MasterCategoryManager />,
+          },
+          {
+            icon: <TableCellsIcon {...icon} />,
+            name: "Category Mapping",
+            path: "/masterdata/category-mapping",
+            element: <CategoryMappingDashboard />,
           },
           {
             icon: <TableCellsIcon {...icon} />,

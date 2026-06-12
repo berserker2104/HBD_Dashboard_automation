@@ -101,6 +101,7 @@ SELECTORS = {
     "product_pack_size":    "[class*='pack' i], [class*='variant' i], .MuiSelect-select span, div:has-text('kg'), div:has-text('gm'), div:has-text('L'), div:has-text('ml')",
     "product_availability": "[class*='out-of-stock' i], [class*='unavailable' i], div:has-text('Out of Stock')",
     "product_sku":          "[data-sku], [data-product-id], [data-id], [id*='sku' i]",
+    "product_image":        "img[src*='images/products/'], img[src*='cdn.dmart.in/images/'], img",
     
     # ── Infinite Scroll ──
     "scroll_sentinel":      "[class*='loading' i], [class*='spinner' i], [class*='loader' i]",
