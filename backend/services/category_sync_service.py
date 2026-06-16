@@ -356,12 +356,6 @@ def sync_platform_categories(platform_name=None):
                     deactivated_count += 1
 
             db.session.commit()
-            
-            # Merge duplicate master categories (paths that have duplicate nodes)
-            merge_duplicate_master_categories()
-
-            # Clean up unused system-generated master categories
-            _cleanup_unused_system_master_categories()
 
         except Exception as e:
             db.session.rollback()
@@ -374,6 +368,13 @@ def sync_platform_categories(platform_name=None):
             'updated_categories': updated_count,
             'deactivated_categories': deactivated_count
         }
+
+    # Merge duplicates and clean up system master categories once after processing all platforms
+    try:
+        merge_duplicate_master_categories()
+        _cleanup_unused_system_master_categories()
+    except Exception as cleanup_err:
+        print(f'[CategorySync] Error in post-sync cleanup: {cleanup_err}')
 
     return results
 
@@ -390,48 +391,41 @@ def _cleanup_unused_system_master_categories():
         # We process from highest level (deepest leaves) down to level 1 (roots)
         # to ensure childless parents are cleaned up in a single run.
         for level in range(4, 0, -1):
-            candidates = MasterCategory.query.filter_by(
-                level=level,
-                is_active=True
-            ).all()
+            # Find all candidates using a single bulk query
+            sql = """
+                SELECT mc.id FROM master_categories mc
+                WHERE mc.level = :level AND mc.is_active = 1
+                  AND NOT EXISTS (
+                      SELECT 1 FROM platform_category_mapping pcm 
+                      WHERE pcm.master_category_id = mc.id AND pcm.is_active = 1
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM master_categories child 
+                      WHERE child.parent_id = mc.id AND child.is_active = 1
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM category_mapping_history cmh 
+                      WHERE cmh.master_category_id = mc.id AND cmh.action = 'CREATED' AND cmh.changed_by = 'system'
+                  )
+            """
+            candidate_rows = db.session.execute(text(sql), {"level": level}).fetchall()
+            candidate_ids = [r[0] for r in candidate_rows]
             
-            for mc in candidates:
-                # 1. Check if there are active mappings pointing to it
-                active_mappings = PlatformCategoryMapping.query.filter_by(
-                    master_category_id=mc.id,
-                    is_active=True
-                ).first()
+            if not candidate_ids:
+                continue
                 
-                if active_mappings is not None:
-                    continue
-                    
-                # 2. Check if it has any active child categories
-                active_children = MasterCategory.query.filter_by(
-                    parent_id=mc.id,
-                    is_active=True
-                ).first()
-                
-                if active_children is not None:
-                    continue
-                    
-                # 3. Check if it is system-generated (by checking creation history)
-                # If there's a history log showing it was created by 'system'
-                creation_history = CategoryMappingHistory.query.filter_by(
-                    master_category_id=mc.id,
-                    action='CREATED',
-                    changed_by='system'
-                ).first()
-                
-                if creation_history is None:
-                    # Keep manually created master categories active
-                    continue
-                    
-                # Deactivate it!
-                mc.is_active = False
-                mc.updated_at = datetime.utcnow()
-                
+            print(f"[Cleanup] Deactivating {len(candidate_ids)} unused system categories at level {level}...")
+            
+            # Deactivate them in bulk
+            db.session.execute(
+                text("UPDATE master_categories SET is_active = 0, updated_at = :now WHERE id IN :ids"),
+                {"now": datetime.utcnow(), "ids": tuple(candidate_ids)}
+            )
+            
+            # Record in history
+            for mc_id in candidate_ids:
                 history = CategoryMappingHistory(
-                    master_category_id=mc.id,
+                    master_category_id=mc_id,
                     action='DEACTIVATED',
                     old_value='is_active=True',
                     new_value='is_active=False',
@@ -439,6 +433,8 @@ def _cleanup_unused_system_master_categories():
                     notes='Unused system-generated category (no active mappings or children)'
                 )
                 db.session.add(history)
+                
+            db.session.flush()
                 
         db.session.commit()
     except Exception as cleanup_err:
@@ -468,6 +464,16 @@ def merge_duplicate_master_categories():
                 path_groups[path_norm] = []
             path_groups[path_norm].append(mc)
             
+        # Pre-load system created IDs to avoid N+1 queries during sorting
+        system_created_ids = set()
+        try:
+            hist_rows = db.session.execute(text(
+                "SELECT DISTINCT master_category_id FROM category_mapping_history WHERE action='CREATED' AND changed_by='system'"
+            )).fetchall()
+            system_created_ids = {r[0] for r in hist_rows}
+        except Exception as hist_err:
+            print(f"[Merge] Error fetching creation history: {hist_err}")
+
         merged_count = 0
         for path_norm, group in path_groups.items():
             if len(group) <= 1:
@@ -475,11 +481,7 @@ def merge_duplicate_master_categories():
                 
             # Sort the group: prefer manual over system-created, then lower ID first
             def sort_key(mc):
-                is_system = CategoryMappingHistory.query.filter_by(
-                    master_category_id=mc.id,
-                    action='CREATED',
-                    changed_by='system'
-                ).first() is not None
+                is_system = mc.id in system_created_ids
                 return (is_system, mc.id)
                 
             group.sort(key=sort_key)
@@ -597,9 +599,9 @@ def auto_map_pending():
         # Construct raw mapping's full path parts by splitting both columns by ' > '
         mapping_parts = []
         if mapping.platform_category_raw:
-            mapping_parts.extend([p.strip() for p in mapping.platform_category_raw.split(' > ') if p.strip()])
+            mapping_parts.extend([p.strip() for p in re.split(r'\s*>\s*', mapping.platform_category_raw) if p.strip()])
         if mapping.platform_subcategory_raw:
-            mapping_parts.extend([p.strip() for p in mapping.platform_subcategory_raw.split(' > ') if p.strip()])
+            mapping_parts.extend([p.strip() for p in re.split(r'\s*>\s*', mapping.platform_subcategory_raw) if p.strip()])
 
         # Apply synonym replacement element-by-element
         resolved_parts = []
@@ -666,9 +668,9 @@ def auto_map_pending():
                 # Combine category and subcategory into a single list of parts
                 raw_parts = []
                 if mapping.platform_category_raw:
-                    raw_parts.extend([p.strip() for p in mapping.platform_category_raw.split(' > ') if p.strip()])
+                    raw_parts.extend([p.strip() for p in re.split(r'\s*>\s*', mapping.platform_category_raw) if p.strip()])
                 if mapping.platform_subcategory_raw:
-                    raw_parts.extend([p.strip() for p in mapping.platform_subcategory_raw.split(' > ') if p.strip()])
+                    raw_parts.extend([p.strip() for p in re.split(r'\s*>\s*', mapping.platform_subcategory_raw) if p.strip()])
 
                 if not raw_parts:
                     raise ValueError("No category parts found")
@@ -744,18 +746,26 @@ def auto_map_pending():
                     part_level = idx + 2
                     part_norm = normalize_category_name(part)
                     
-                    # Find if child exists under current_parent (regardless of active status)
-                    child_node = current_parent.children.filter_by(
-                        name=part
-                    ).first()
+                    # Construct full path and check in-memory cache first to avoid N+1 queries
+                    child_path = f"{current_parent.path} > {part}"
+                    child_path_parts = [normalize_category_name(p) for p in child_path.split(' > ') if p.strip()]
+                    child_key = " > ".join(child_path_parts)
+                    
+                    child_node = master_lookup_norm.get(child_key)
                     
                     if not child_node:
-                        # Search by normalized name in all children (active or inactive)
-                        all_children = current_parent.children.all()
-                        for child in all_children:
-                            if normalize_category_name(child.name) == part_norm:
-                                child_node = child
-                                break
+                        # Find if child exists under current_parent (regardless of active status)
+                        child_node = current_parent.children.filter_by(
+                            name=part
+                        ).first()
+                        
+                        if not child_node:
+                            # Search by normalized name in all children (active or inactive)
+                            all_children = current_parent.children.all()
+                            for child in all_children:
+                                if normalize_category_name(child.name) == part_norm:
+                                    child_node = child
+                                    break
                                 
                     if child_node:
                         if not child_node.is_active:
