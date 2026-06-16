@@ -120,6 +120,8 @@ import { SignUp } from "./pages/auth/sign-up";
 import MasterDataDashboard from "./componunts/MasterDataDashboard";
 import { element } from "prop-types";
 import LocationMasterData from "./componunts/masterdata/LocationMasterData";
+import MasterCategoryManager from "./componunts/masterdata/MasterCategoryManager";
+import CategoryMappingDashboard from "./componunts/masterdata/CategoryMappingDashboard";
 const icon = {
   className: "w-5 h-5 text-inherit",
 };
@@ -438,6 +440,18 @@ export const routes = [
           },
           {
             icon: <TableCellsIcon {...icon} />,
+            name: "Master Categories",
+            path: "/masterdata/master-categories",
+            element: <MasterCategoryManager />,
+          },
+          {
+            icon: <TableCellsIcon {...icon} />,
+            name: "Category Mapping",
+            path: "/masterdata/category-mapping",
+            element: <CategoryMappingDashboard />,
+          },
+          {
+            icon: <TableCellsIcon {...icon} />,
             name: "Duplicate Data",
             path: "/masterdata/duplicate-data",
             element: <DuplicateData />,
@@ -677,7 +691,12 @@ export const routes = [
             path: "/scrapper/dmart",
             element: <DmartScrapper />,
           },
-          // ... rest of scrappers
+          {
+            icon: <ShoppingCartIcon {...icon} />,
+            name: "Zepto",
+            path: "/scrapper/zepto",
+            element: <ZeptoScrapper />,
+          },
           {
             icon: <ShoppingCartIcon {...icon} />,
             name: "India Mart",
