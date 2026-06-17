@@ -36,8 +36,8 @@ class Config:
     # 1. Store token in cookies (Auto-login)
     JWT_TOKEN_LOCATION = ['cookies']
 
-    # 2. Set to True because your live site uses HTTPS
-    JWT_COOKIE_SECURE = True 
+    # 2. Set to False for local development (allow cookies over HTTP)
+    JWT_COOKIE_SECURE = False
 
     # 3. Disable CSRF for now
     JWT_COOKIE_CSRF_PROTECT = False
