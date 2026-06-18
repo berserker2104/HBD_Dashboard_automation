@@ -47,6 +47,11 @@ backend/logs/
 *.sqlite
 *.sqlite3
 *.csv
+!backend/flipkart_scrapy/categories.csv
 *.xlsx
 *.xls
 backend/logs/*.log
+
+# Flipkart Scrapy — generated output (not committed)
+backend/flipkart_scrapy/output/
+backend/flipkart_scrapy/outputs/

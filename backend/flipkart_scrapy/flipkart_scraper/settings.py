@@ -1,9 +1,5 @@
 """
-settings.py — Scrapy project settings for Flipkart scraper (Dashboard copy).
-
-NOTE: MySQLPipeline is intentionally NOT included here.
-The dashboard's FlipkartFlaskDatabasePipeline in flipkart_service.py
-handles all database writes directly via the Flask app context.
+settings.py — Scrapy project settings for Flipkart scraper.
 """
 
 BOT_NAME = "flipkart_scraper"
@@ -26,24 +22,28 @@ RETRY_ENABLED = True
 RETRY_TIMES = 3
 RETRY_HTTP_CODES = [429, 502, 503, 504]
 
+# ── HTTP Cache (useful during development) ────────────────────────────────────
+# HTTPCACHE_ENABLED = True
+# HTTPCACHE_EXPIRATION_SECS = 3600
+
 # ── Middlewares ───────────────────────────────────────────────────────────────
 DOWNLOADER_MIDDLEWARES = {
     "flipkart_scraper.middlewares.RotateUserAgentMiddleware": 400,
     "flipkart_scraper.middlewares.FlipkartHeadersMiddleware": 410,
     "scrapy.downloadermiddlewares.retry.RetryMiddleware": 550,
+    "scrapy.downloadermiddlewares.httpcache.HttpCacheMiddleware": 900,
 }
 
-# ── Pipelines ─────────────────────────────────────────────────────────────────
-# NOTE: Only CleaningPipeline and DedupPipeline are active here.
-# The FlipkartFlaskDatabasePipeline from flipkart_service.py is injected
-# programmatically at runtime (priority 400) to handle MySQL writes.
+# ── Pipelines (order matters) ─────────────────────────────────────────────────
 ITEM_PIPELINES = {
-    "flipkart_scraper.pipelines.CleaningPipeline": 100,
-    "flipkart_scraper.pipelines.DedupPipeline": 200,
+    "flipkart_scraper.pipelines.CleaningPipeline": 100,   # clean first
+    "flipkart_scraper.pipelines.DedupPipeline": 200,      # dedup second
+    "flipkart_scraper.pipelines.CSVExportPipeline": 300,  # write CSV
+    "flipkart_scraper.pipelines.MySQLPipeline": 400,      # write to MySQL directly
 }
 
 # ── Output ────────────────────────────────────────────────────────────────────
-FEEDS = {}  # No CSV output in dashboard mode — FlipkartFlaskDatabasePipeline handles storage
+FEEDS = {}  # We handle output in CSVExportPipeline — disable default feed
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_LEVEL = "INFO"
